@@ -28,7 +28,7 @@ Windows, macOS and Linux. `cargo clippy` needs `dist/` to exist (run `npm run bu
 | `src/worker/compress.worker.ts` | Engine: decode → resize → encode → metadata → SSIM; target-size and auto quality search |
 | `src/worker/decode.ts` | Sniffs bytes; browser decoders, jSquash, utif2 (TIFF), heic-to (HEIC) |
 | `src/lib/pool.ts` | Worker pool (one per core, max 6), affinity so a worker keeps its decoded picture |
-| `src/worker/large.ts` | Large JPEGs (> `LARGE_PIXELS`): banded encode via `jpeg-stream.ts` (streaming decoder), `rows.ts` (area resize), `jpeg-join.ts` (joins MozJPEG bands) |
+| `src/worker/large.ts` | Large JPEGs (> `LARGE_PIXELS`): banded encode via `jpeg-stream.ts` (streaming decoder), `rows.ts` (area resize), `jpeg-join.ts` (joins MozJPEG bands); bands compress in parallel in `band.worker.ts` helpers (the pool's `threads` hint says how many) |
 | `src/lib/metadata.ts` | Lossless JPEG EXIF/ICC copy, orientation reset, GPS removal (tested) |
 | `src/lib/ssim.ts`, `format.ts`, `settings.ts`, `types.ts` | SSIM + proxy tiles, naming/sizes, presets/defaults, types |
 | `src/components/` | CompareView (split viewer), SettingsPanel, FileList, EmptyState, About, `ui.tsx` primitives |

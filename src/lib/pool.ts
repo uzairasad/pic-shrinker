@@ -96,6 +96,9 @@ export class CompressPool {
       const slot = idle.find((s) => s.lastItem === job.itemId) ?? idle.find((s) => !s.lastItem) ?? idle[0];
       slot.busy = job;
       slot.lastItem = job.itemId;
+      // Cores for a large picture's bands: shared between the jobs running now and those about to.
+      const cores = navigator.hardwareConcurrency || 4;
+      const jobs = Math.min(this.slots.length, this.slots.filter((s) => s.busy).length + this.queue.length);
       const req: JobRequest = {
         jobId: job.jobId,
         itemId: job.itemId,
@@ -103,6 +106,7 @@ export class CompressPool {
         settings: job.settings,
         wantThumb: job.wantThumb,
         wantPreview: job.wantPreview,
+        threads: Math.max(1, Math.floor(cores / Math.max(1, jobs))),
       };
       slot.worker.postMessage(req);
     }
