@@ -14,7 +14,7 @@ export function About({ onClose, updates }: { onClose: () => void; updates: Retu
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 pt-[max(1rem,var(--safe-top))] pb-[max(1rem,var(--safe-bottom))] backdrop-blur-sm" onClick={onClose}>
       <div
         role="dialog"
         aria-modal="true"

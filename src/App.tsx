@@ -343,9 +343,9 @@ export default function App() {
   const nextTheme: Theme = theme === 'system' ? 'dark' : theme === 'dark' ? 'light' : 'system';
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col pl-[var(--safe-left)] pr-[var(--safe-right)]">
       {/* Top bar */}
-      <header className="flex h-14 short:h-11 shrink-0 items-center gap-1 sm:gap-2 border-b border-line bg-panel px-3 sm:px-4">
+      <header className="box-content flex h-14 short:h-11 shrink-0 pt-[var(--safe-top)] items-center gap-1 sm:gap-2 border-b border-line bg-panel px-3 sm:px-4">
         <div className="flex items-center gap-2.5 pr-1 sm:pr-2">
           <Logo size={30} />
           <span className="hidden text-[15px] font-semibold tracking-tight sm:inline">{APP_NAME}</span>
@@ -450,7 +450,7 @@ export default function App() {
       </div>
 
       {/* Phone / narrow window tabs */}
-      <nav className="grid shrink-0 grid-cols-3 border-t border-line bg-panel pb-[env(safe-area-inset-bottom)] lg:hidden">
+      <nav className="grid shrink-0 grid-cols-3 border-t border-line bg-panel pb-[var(--safe-bottom)] lg:hidden">
         {(
           [
             ['list', Images, 'Pictures'],

@@ -62,6 +62,18 @@
   color-scheme: dark;
 }
 
+/*
+ * Room for the status bar / camera cutout and the gesture bar when the app is drawn edge to edge
+ * (Android 15+, iPhone, installed PWAs). Some Android WebViews report 0 even then; native.ts
+ * sets the fallbacks for those.
+ */
+:root {
+  --safe-top: max(env(safe-area-inset-top, 0px), var(--safe-top-fallback, 0px));
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-bottom-fallback, 0px));
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}
+
 html,
 body,
 #root {
