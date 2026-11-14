@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.3 — 2026-11-14
+
+- **Fixed: very large pictures came out with stripes of coloured noise.** A 500-megapixel
+  panorama (31800×15900) saved with bands of noise across it. Each band of a large picture was
+  encoded with cut-down code tables that could lack codes the band needed. Bands now get
+  complete tables (files and speed are about the same), and the app checks every band before
+  joining them, so a damaged band stops the job with an error instead of being saved. The
+  similarity score for such pictures is right again too (it was dragged down by the damage).
+
 ## 0.2.2 — 2026-11-14
 
 - **Fixed: large pictures failed with "Not enough memory" in the apps** (phone and desktop),
