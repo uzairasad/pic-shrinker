@@ -155,8 +155,8 @@ Rust checks: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D wa
 
 1. Set the new version in `package.json` (the installers read it from there) and in
    `Cargo.toml` under `[workspace.package]`, and add it to `CHANGELOG.md`.
-2. Commit, then tag and push, for example `git tag v0.2.0 && git push origin main v0.2.0`.
-3. `.github/workflows/release.yml` builds every platform on GitHub Actions, signs the Android
+2. Commit and push to `main`. No tag push is needed: `.github/workflows/release.yml` sees the
+   new version, tags that commit `vX.Y.Z`, builds every platform on GitHub Actions, signs the Android
    app, attaches `SHA256SUMS.txt` and publishes the release. The website's download buttons pick
    up the new files automatically.
 
