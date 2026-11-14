@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-11-14
 
 - **Very large JPEGs work.** Maps, scans and panoramas over 64 megapixels (tested at
   20000×14000, 84 MB) used to fail with "Aborted()": the encoder ran out of memory. They are now
