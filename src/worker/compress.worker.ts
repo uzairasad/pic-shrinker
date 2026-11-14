@@ -5,10 +5,22 @@
  * in target-size and auto modes), restores metadata, and measures SSIM against the original.
  */
 import { targetDimensions } from '../lib/format.ts';
-import { cleanExif, insertSegments, readJpegMetadata, rewriteJpegMetadata, type JpegSegment } from '../lib/metadata.ts';
+import { cleanExif, insertSegments, readJpegMetadata, readOrientation, rewriteJpegMetadata, type JpegSegment } from '../lib/metadata.ts';
 import { proxyImage, ssim } from '../lib/ssim.ts';
 import type { CompressResult, EncodableFormat, Settings } from '../lib/types.ts';
 import { decodeEncoded, decodeFile, NEEDS_PREVIEW, type Decoded, type SourceKind } from './decode.ts';
+import { bisectForSize, encode, isLossless, lookQuality, RANGE } from './encode.ts';
+import {
+  compressLarge,
+  LARGE_PIXELS,
+  largeJpegInfo,
+  largeSource,
+  orientationExif,
+  orientImage,
+  readWhole,
+  swapsSides,
+  type LargeSource,
+} from './large.ts';
 
 export interface JobRequest {
   jobId: number;
@@ -21,7 +33,7 @@ export interface JobRequest {
 
 export type JobResponse =
   | { jobId: number; ok: true; result: CompressResult }
-  | { jobId: number; ok: false; error: string };
+  | { jobId: number; ok: false; error: string; fatal?: boolean };
 
 const MIME: Record<EncodableFormat, string> = {
   jpeg: 'image/jpeg',
@@ -92,92 +104,6 @@ function flatten(img: ImageData, background: string): ImageData {
   return new ImageData(out, img.width, img.height);
 }
 
-function isLossless(fmt: EncodableFormat, s: Settings) {
-  return fmt === 'png' || (fmt === 'webp' && s.webp.lossless) || (fmt === 'avif' && s.avif.lossless);
-}
-
-async function encode(fmt: EncodableFormat, img: ImageData, s: Settings, quality: number): Promise<ArrayBuffer> {
-  const q = Math.max(1, Math.min(100, Math.round(quality)));
-  switch (fmt) {
-    case 'jpeg': {
-      const { default: enc } = await import('@jsquash/jpeg/encode.js');
-      const j = s.jpeg;
-      return enc(img, {
-        quality: q,
-        progressive: j.progressive,
-        baseline: !j.progressive,
-        optimize_coding: true,
-        smoothing: j.smoothing,
-        // MozJpegColorSpace: 1 = grayscale, 3 = YCbCr.
-        color_space: j.grayscale ? 1 : 3,
-        quant_table: j.quantTable,
-        trellis_multipass: j.trellis,
-        trellis_opt_zero: j.trellis,
-        trellis_opt_table: j.trellis,
-        trellis_loops: j.trellis ? 2 : 1,
-        auto_subsample: j.autoSubsample,
-        chroma_subsample: j.chromaSubsample,
-        separate_chroma_quality: j.separateChromaQuality,
-        chroma_quality: j.separateChromaQuality ? j.chromaQuality : q,
-      });
-    }
-    case 'webp': {
-      const { default: enc } = await import('@jsquash/webp/encode.js');
-      const w = s.webp;
-      return enc(img, {
-        quality: q,
-        method: w.effort,
-        lossless: w.lossless ? 1 : 0,
-        near_lossless: w.lossless ? w.nearLossless : 100,
-        use_sharp_yuv: w.sharpYuv ? 1 : 0,
-        alpha_quality: 100,
-        exact: 0,
-      });
-    }
-    case 'avif': {
-      const { default: enc } = await import('@jsquash/avif/encode.js');
-      const a = s.avif;
-      return enc(img, {
-        quality: q,
-        speed: a.speed,
-        subsample: a.lossless ? 3 : a.subsample,
-        lossless: a.lossless,
-        enableSharpYUV: !a.lossless,
-      });
-    }
-    case 'png': {
-      const { default: optimise } = await import('@jsquash/oxipng/optimise.js');
-      return optimise(img, { level: s.png.level, interlace: s.png.interlace, optimiseAlpha: true });
-    }
-  }
-}
-
-/** Quality search range per codec (outside it, results are either awful or wasteful). */
-const RANGE: Record<EncodableFormat, [number, number]> = {
-  jpeg: [10, 96],
-  webp: [10, 96],
-  avif: [10, 92],
-  png: [100, 100],
-};
-
-/** Highest quality whose file fits in `targetBytes`, by binary search on `img`. */
-async function bisectForSize(fmt: EncodableFormat, img: ImageData, s: Settings, targetBytes: number, lo: number, hi: number) {
-  let best: { bytes: ArrayBuffer; quality: number } | null = null;
-  let smallest: { bytes: ArrayBuffer; quality: number } | null = null;
-  while (lo <= hi) {
-    const q = Math.floor((lo + hi) / 2);
-    const bytes = await encode(fmt, img, s, q);
-    if (!smallest || bytes.byteLength < smallest.bytes.byteLength) smallest = { bytes, quality: q };
-    if (bytes.byteLength <= targetBytes) {
-      best = { bytes, quality: q };
-      lo = q + 1;
-    } else {
-      hi = q - 1;
-    }
-  }
-  return { best, smallest: smallest! };
-}
-
 /** Highest quality whose file fits in `targetBytes`. */
 async function searchForSize(fmt: EncodableFormat, img: ImageData, s: Settings, targetBytes: number) {
   const [min, max] = RANGE[fmt];
@@ -224,20 +150,8 @@ async function lowest(fmt: EncodableFormat, img: ImageData, s: Settings, smalles
 /** Lowest quality whose SSIM (on a proxy of the picture) reaches `target`. */
 async function searchForLook(fmt: EncodableFormat, img: ImageData, s: Settings, target: number) {
   const proxy = proxyImage(img, (d, w, h) => new ImageData(d as Uint8ClampedArray<ArrayBuffer>, w, h));
-  let [lo, hi] = RANGE[fmt];
-  let found = hi;
-  while (lo <= hi) {
-    const q = Math.floor((lo + hi) / 2);
-    const bytes = await encode(fmt, proxy, s, q);
-    const score = ssim(proxy, await decodeEncoded(bytes, fmt));
-    if (score >= target) {
-      found = q;
-      hi = q - 1;
-    } else {
-      lo = q + 1;
-    }
-  }
-  return { quality: found, bytes: await encode(fmt, img, s, found) };
+  const quality = await lookQuality(fmt, proxy, s, target);
+  return { quality, bytes: await encode(fmt, img, s, quality) };
 }
 
 async function jpegPreview(img: ImageData, maxSide: number, quality: number): Promise<ArrayBuffer> {
@@ -263,23 +177,50 @@ async function run(req: JobRequest): Promise<CompressResult> {
   // Metadata is carried JPEG → JPEG. Then the colour profile goes along, so pixels stay unconverted.
   const carryMeta = isJpegSource && wantsJpegOut && s.metadata !== 'strip';
 
-  const { image: source, kind } = await decodeCached(req.itemId, req.file, carryMeta);
-  const fmt = resolveFormat(s, kind);
-  const dims = targetDimensions(source.width, source.height, s.resize);
-  const resized = dims.width !== source.width || dims.height !== source.height;
-
-  let img = source;
-  if (resized) {
-    const { default: resize } = await import('@jsquash/resize');
-    img = await resize(source, {
-      width: dims.width,
-      height: dims.height,
-      method: s.resize.method,
-      fitMethod: 'stretch',
-      premultiply: true,
-      linearRGB: true,
-    });
+  let source: ImageData;
+  let kind: SourceKind;
+  let img: ImageData;
+  let resized: boolean;
+  /** Large JPEGs are decoded by our own decoder: as stored (not turned upright), no colour management. */
+  let large: { orientation: number; data: Uint8Array } | null = null;
+  const largeInfo = isJpegSource ? await largeJpegInfo(req.file) : null;
+  if (largeInfo) {
+    const data = new Uint8Array(await req.file.arrayBuffer());
+    const orientation = readOrientation(readJpegMetadata(data).exif);
+    large = { orientation, data };
+    const swap = swapsSides(orientation);
+    const upright = swap ? { width: largeInfo.height, height: largeInfo.width } : largeInfo;
+    const dims = targetDimensions(upright.width, upright.height, s.resize);
+    resized = dims.width !== upright.width || dims.height !== upright.height;
+    // The decoder (and its resizer) work on the picture as stored; it's turned afterwards.
+    const src = largeSource(data, swap ? dims.height : dims.width, swap ? dims.width : dims.height);
+    if (dims.width * dims.height > LARGE_PIXELS) {
+      return runLarge(req, src, { ...large, upright, dims, resized, t0 });
+    }
+    // Small enough once resized: shrunk while decoding, then the normal pipeline.
+    img = orientImage(readWhole(src), orientation);
+    source = img;
+    kind = 'jpeg';
+  } else {
+    ({ image: source, kind } = await decodeCached(req.itemId, req.file, carryMeta));
+    const dims = targetDimensions(source.width, source.height, s.resize);
+    resized = dims.width !== source.width || dims.height !== source.height;
+    img = source;
+    if (resized) {
+      const { default: resize } = await import('@jsquash/resize');
+      img = await resize(source, {
+        width: dims.width,
+        height: dims.height,
+        method: s.resize.method,
+        fitMethod: 'stretch',
+        premultiply: true,
+        linearRGB: true,
+      });
+    }
   }
+  const fmt = resolveFormat(s, kind);
+  const sourceWidth = largeInfo ? (swapsSides(large!.orientation) ? largeInfo.height : largeInfo.width) : source.width;
+  const sourceHeight = largeInfo ? (swapsSides(large!.orientation) ? largeInfo.width : largeInfo.height) : source.height;
   if (fmt === 'jpeg') img = flatten(img, s.background);
 
   let bytes: ArrayBuffer;
@@ -300,10 +241,11 @@ async function run(req: JobRequest): Promise<CompressResult> {
     bytes = await encode(fmt, img, s, s.quality);
   }
 
-  if (fmt === 'jpeg' && carryMeta) {
+  // Large pictures' pixels weren't colour-converted, so their profile always goes along.
+  if (fmt === 'jpeg' && (carryMeta || large)) {
     const meta = readJpegMetadata(new Uint8Array(await req.file.arrayBuffer()));
     const segments: JpegSegment[] = [];
-    if (meta.exif && (s.metadata === 'keep' || s.metadata === 'nogps')) {
+    if (meta.exif && carryMeta && (s.metadata === 'keep' || s.metadata === 'nogps')) {
       segments.push({
         marker: 0xe1,
         payload: cleanExif(meta.exif, { removeGps: s.metadata === 'nogps', width: img.width, height: img.height }),
@@ -344,8 +286,8 @@ async function run(req: JobRequest): Promise<CompressResult> {
     extension: kind === 'jpeg' && fmt === 'jpeg' && /\.jpe?g$/i.test(req.file.name) ? req.file.name.split('.').pop()!.toLowerCase() : EXT[fmt],
     width: img.width,
     height: img.height,
-    sourceWidth: source.width,
-    sourceHeight: source.height,
+    sourceWidth,
+    sourceHeight,
     quality,
     ssim: score,
     keptOriginal,
@@ -354,6 +296,82 @@ async function run(req: JobRequest): Promise<CompressResult> {
   if (req.wantThumb) result.thumb = await jpegPreview(source, 192, 0.8);
   if (req.wantPreview && NEEDS_PREVIEW.includes(kind)) result.originalPreview = await jpegPreview(source, 4096, 0.92);
   return result;
+}
+
+const FORMAT_NAME: Record<EncodableFormat, string> = { jpeg: 'JPEG', webp: 'WebP', avif: 'AVIF', png: 'PNG' };
+
+/** A large JPEG whose result is large too: encoded in bands, never held whole (see large.ts). */
+async function runLarge(
+  req: JobRequest,
+  src: LargeSource,
+  o: {
+    orientation: number;
+    data: Uint8Array;
+    upright: { width: number; height: number };
+    dims: { width: number; height: number };
+    resized: boolean;
+    t0: number;
+  },
+): Promise<CompressResult> {
+  const s = req.settings;
+  const fmt = resolveFormat(s, 'jpeg');
+  if (fmt !== 'jpeg') {
+    const mp = Math.floor(LARGE_PIXELS / 1e6);
+    throw new Error(
+      `This picture (${o.dims.width}×${o.dims.height}) is too large to save as ${FORMAT_NAME[fmt]}. Choose JPEG, or resize it to under ${mp} megapixels.`,
+    );
+  }
+  const out = await compressLarge(src, s, req.wantThumb);
+  let bytes: Uint8Array = out.bytes;
+
+  // Metadata. The pixels are as stored (not turned upright, not colour-converted), so the
+  // orientation and colour profile must go along whatever the setting.
+  const meta = readJpegMetadata(o.data);
+  const segments: JpegSegment[] = [];
+  if (meta.exif && (s.metadata === 'keep' || s.metadata === 'nogps')) {
+    segments.push({
+      marker: 0xe1,
+      payload: cleanExif(meta.exif, { removeGps: s.metadata === 'nogps', resetOrientation: false, width: src.width, height: src.height }),
+    });
+  } else if (o.orientation > 1 && o.orientation <= 8) {
+    segments.push({ marker: 0xe1, payload: orientationExif(o.orientation) });
+  }
+  for (const icc of meta.icc) segments.push({ marker: 0xe2, payload: icc });
+  if (segments.length) bytes = insertSegments(bytes, segments);
+
+  let keptOriginal = false;
+  if (s.neverLarger && !o.resized && bytes.byteLength >= req.file.size) {
+    bytes = rewriteJpegMetadata(o.data, s.metadata);
+    keptOriginal = true;
+  }
+
+  const result: CompressResult = {
+    bytes: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+    mime: MIME.jpeg,
+    extension: /\.jpe?g$/i.test(req.file.name) ? req.file.name.split('.').pop()!.toLowerCase() : EXT.jpeg,
+    width: o.dims.width,
+    height: o.dims.height,
+    sourceWidth: o.upright.width,
+    sourceHeight: o.upright.height,
+    quality: keptOriginal ? s.quality : out.quality,
+    ssim: keptOriginal ? 1 : out.ssim,
+    keptOriginal,
+    ms: Math.round(performance.now() - o.t0),
+  };
+  if (out.thumb) result.thumb = await jpegPreview(orientImage(out.thumb, o.orientation), 192, 0.8);
+  return result;
+}
+
+/** Emscripten codecs abort when they run out of memory; say so in plain words. */
+function friendlyError(message: string): { error: string; fatal: boolean } {
+  if (/Aborted\(|out of memory|memory access out of bounds|Array buffer allocation failed|Invalid typed array length/i.test(message)) {
+    return {
+      error: 'Not enough memory to compress this picture. Try resizing it, or close other apps and try again.',
+      // A codec that aborted can't be used again: the pool replaces this worker.
+      fatal: true,
+    };
+  }
+  return { error: message, fatal: false };
 }
 
 self.onmessage = async (e: MessageEvent<JobRequest>) => {
@@ -365,7 +383,7 @@ self.onmessage = async (e: MessageEvent<JobRequest>) => {
     if (result.originalPreview) transfer.push(result.originalPreview);
     (self as unknown as DedicatedWorkerGlobalScope).postMessage({ jobId: req.jobId, ok: true, result } satisfies JobResponse, transfer);
   } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
-    (self as unknown as DedicatedWorkerGlobalScope).postMessage({ jobId: req.jobId, ok: false, error } satisfies JobResponse);
+    const { error, fatal } = friendlyError(err instanceof Error ? err.message : String(err));
+    (self as unknown as DedicatedWorkerGlobalScope).postMessage({ jobId: req.jobId, ok: false, error, fatal } satisfies JobResponse);
   }
 };

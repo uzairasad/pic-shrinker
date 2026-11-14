@@ -101,6 +101,11 @@ Tip: on the desktop you can pass pictures or folders on the command line
 - **Quality search.** Target-size mode binary-searches the encoder quality (on a full-resolution
   sample of a large picture first, then confirms on the whole picture). Auto mode searches for
   the lowest quality whose SSIM stays above the threshold.
+- **Very large JPEGs.** Scanned maps, panoramas and aerial photos of hundreds of megapixels
+  (over 64 MP) never sit in memory whole: a streaming decoder (`src/lib/jpeg-stream.ts`) reads
+  them a band at a time, resizing on the fly if asked, MozJPEG encodes each band, and
+  `src/lib/jpeg-join.ts` joins the bands into one baseline JPEG with optimal Huffman tables.
+  A 20000×14000 map uses a couple of hundred megabytes instead of several gigabytes.
 - **Lossless metadata editing.** EXIF and ICC segments are copied from the original JPEG,
   cleaned (orientation reset, pixel size updated, GPS directory removed and zeroed) and written
   into the new file, in `src/lib/metadata.ts`.

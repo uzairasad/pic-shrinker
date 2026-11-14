@@ -29,12 +29,21 @@ function luma(img: Pixels): Float32Array {
 }
 
 export function ssim(a: Pixels, b: Pixels, window = 8): number {
+  const { sum, count } = ssimParts(a, b, window);
+  return count ? sum / count : 1;
+}
+
+/**
+ * The window sum and count behind `ssim`, so a picture handled in strips (heights a multiple of
+ * the window) can be scored as a whole: add up the parts, then divide.
+ */
+export function ssimParts(a: Pixels, b: Pixels, window = 8): { sum: number; count: number } {
   if (a.width !== b.width || a.height !== b.height) throw new Error('ssim: size mismatch');
   const { width: w, height: h } = a;
   const la = luma(a);
   const lb = luma(b);
   if (w < window || h < window) {
-    return windowSsim(la, lb, w, 0, 0, w, h);
+    return { sum: windowSsim(la, lb, w, 0, 0, w, h), count: 1 };
   }
   let sum = 0;
   let count = 0;
@@ -44,7 +53,7 @@ export function ssim(a: Pixels, b: Pixels, window = 8): number {
       count++;
     }
   }
-  return count ? sum / count : 1;
+  return { sum, count };
 }
 
 function windowSsim(

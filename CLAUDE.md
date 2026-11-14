@@ -28,6 +28,7 @@ Windows, macOS and Linux. `cargo clippy` needs `dist/` to exist (run `npm run bu
 | `src/worker/compress.worker.ts` | Engine: decode → resize → encode → metadata → SSIM; target-size and auto quality search |
 | `src/worker/decode.ts` | Sniffs bytes; browser decoders, jSquash, utif2 (TIFF), heic-to (HEIC) |
 | `src/lib/pool.ts` | Worker pool (one per core, max 6), affinity so a worker keeps its decoded picture |
+| `src/worker/large.ts` | Large JPEGs (> `LARGE_PIXELS`): banded encode via `jpeg-stream.ts` (streaming decoder), `rows.ts` (area resize), `jpeg-join.ts` (joins MozJPEG bands) |
 | `src/lib/metadata.ts` | Lossless JPEG EXIF/ICC copy, orientation reset, GPS removal (tested) |
 | `src/lib/ssim.ts`, `format.ts`, `settings.ts`, `types.ts` | SSIM + proxy tiles, naming/sizes, presets/defaults, types |
 | `src/components/` | CompareView (split viewer), SettingsPanel, FileList, EmptyState, About, `ui.tsx` primitives |
@@ -47,6 +48,10 @@ Windows, macOS and Linux. `cargo clippy` needs `dist/` to exist (run `npm run bu
   (`OutputFolders.allowed`), never overwrites (`free_path`), and sanitises relative paths.
 - MozJPEG extra trellis passes are off by default: they made encoding 2–3× slower.
 - Large images: quality searches run on `proxyImage` (4 full-res tiles) first, then confirm.
+- Pictures over `LARGE_PIXELS` (64 MP) must never be held whole: MozJPEG aborts past ~200 MP and
+  an Emscripten abort poisons the module (the worker reports `fatal` and the pool replaces it).
+  Our decoder's pixels are as stored: no EXIF rotation, no colour conversion, so orientation and
+  ICC always go into large outputs. Bands are multiples of 16 rows (whole MCUs) for the joiner.
 - Settings are stored in localStorage under a versioned key (`pic-shrinker:settings:v2`); bump
   it when changing defaults that should override saved values.
 
