@@ -28,7 +28,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYyRjk2QjlDQTJGRTgyRjkKUldUNWd2NmluR3Y1WXF5L2lhZzBTLzJoYmE5UDdETGt6VFEyTVlxS25TcWN2VDlBTmVLZVBxVEQK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENCMDMwNTY4NUZFMjdBQ0YKUldUUGV1SmZhQVVEeTdIT2U2d09CVFJXRU1sV002QXNrUTZqSkxXTk02dFlCbUN0bWFNaWhmekYK",
       "endpoints": ["https://github.com/uzairasad/pic-shrinker/releases/latest/download/latest.json"],
       "windows": {
         "installMode": "passive"
