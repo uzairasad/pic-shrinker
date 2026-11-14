@@ -10,7 +10,7 @@
  *   if it's small enough, it goes through the normal pipeline like any other picture.
  */
 import { JpegStreamDecoder, readJpegInfo, type JpegInfo } from '../lib/jpeg-stream.ts';
-import { joinJpegStrips, type StripStats } from '../lib/jpeg-join.ts';
+import { joinJpegStrips, stripStats, type StripStats } from '../lib/jpeg-join.ts';
 import { AreaResizer, readAll, type LineSource } from '../lib/rows.ts';
 import { ssimParts } from '../lib/ssim.ts';
 import type { Settings } from '../lib/types.ts';
@@ -190,65 +190,82 @@ function proxyOf(src: LargeSource): ImageData {
 }
 
 /**
- * Helper workers (band.worker.ts) that compress bands in parallel. Nested workers exist in every
- * engine we ship on, but if one can't be started the bands are simply compressed here.
+ * How a large job gets band helpers: compress.worker.ts asks the page (pool.ts), which starts
+ * them, waits until each has loaded, and hands back one MessagePort per helper that did. An empty
+ * list (none could start, or one core) means the bands are compressed in the job itself.
  */
-class BandEncoders {
-  private idle: Worker[] = [];
-  private all: Worker[] = [];
-  private waiting: ((w: Worker) => void)[] = [];
-  private nextId = 1;
+type HelperProvider = (count: number) => Promise<{ ports: MessagePort[]; release: () => void }>;
+let provideHelpers: HelperProvider | null = null;
 
-  constructor(count: number) {
-    if (typeof Worker === 'undefined') return;
-    for (let i = 0; i < count; i++) {
-      try {
-        const w = new Worker(new URL('./band.worker.ts', import.meta.url), { type: 'module' });
-        this.all.push(w);
-        this.idle.push(w);
-      } catch {
-        break;
-      }
+export function setHelperProvider(p: HelperProvider) {
+  provideHelpers = p;
+}
+
+class BandFailure extends Error {
+  data?: ArrayBuffer;
+  constructor(message: string, data?: ArrayBuffer) {
+    super(message);
+    this.data = data;
+  }
+}
+
+/** Band helpers (band.worker.ts) that compress bands in parallel. */
+class BandEncoders {
+  private idle: MessagePort[];
+  private waiting: ((p: MessagePort) => void)[] = [];
+  private nextId = 1;
+  readonly size: number;
+  private release: () => void;
+
+  private constructor(ports: MessagePort[], release: () => void) {
+    this.release = release;
+    this.idle = [...ports];
+    this.size = ports.length;
+  }
+
+  static async open(count: number): Promise<BandEncoders> {
+    if (count < 1 || !provideHelpers) return new BandEncoders([], () => {});
+    try {
+      const { ports, release } = await provideHelpers(count);
+      return new BandEncoders(ports, release);
+    } catch {
+      return new BandEncoders([], () => {});
     }
   }
 
-  get size() {
-    return this.all.length;
+  private take(): Promise<MessagePort> {
+    const p = this.idle.pop();
+    return p ? Promise.resolve(p) : new Promise((resolve) => this.waiting.push(resolve));
   }
 
-  private take(): Promise<Worker> {
-    const w = this.idle.pop();
-    return w ? Promise.resolve(w) : new Promise((resolve) => this.waiting.push(resolve));
-  }
-
-  private give(w: Worker) {
+  private give(p: MessagePort) {
     const next = this.waiting.shift();
-    if (next) next(w);
-    else this.idle.push(w);
+    if (next) next(p);
+    else this.idle.push(p);
   }
 
+  /** Rejects with a BandFailure; its `data` is the band's pixels when the helper gave them back. */
   async run(req: Omit<BandRequest, 'id'>): Promise<Extract<BandResponse, { ok: true }>> {
-    const w = await this.take();
+    const port = await this.take();
     const id = this.nextId++;
     try {
       return await new Promise((resolve, reject) => {
-        w.onmessage = (e: MessageEvent<BandResponse>) => {
+        port.onmessage = (e: MessageEvent<BandResponse>) => {
           if (e.data.id !== id) return;
           if (e.data.ok) resolve(e.data);
-          else reject(new Error(e.data.error));
+          else reject(new BandFailure(e.data.error, e.data.data));
         };
-        w.onerror = (e) => reject(new Error(e.message || 'Not enough memory to compress this picture.'));
-        w.postMessage({ ...req, id } satisfies BandRequest, [req.data]);
+        port.postMessage({ ...req, id } satisfies BandRequest, [req.data]);
       });
     } finally {
-      this.give(w);
+      this.give(port);
     }
   }
 
   dispose() {
-    for (const w of this.all) w.terminate();
-    this.all = [];
+    for (const p of this.idle) p.close();
     this.idle = [];
+    this.release();
   }
 }
 
@@ -315,8 +332,26 @@ async function encodeBands(
         count += r.count;
         free.push(r.data);
       })
-      .catch((err) => {
-        failure ??= err;
+      .catch(async (err) => {
+        if (!(err instanceof BandFailure && err.data)) {
+          failure ??= err;
+          return;
+        }
+        // The helper couldn't compress it (out of memory, say) but gave the pixels back: do it here.
+        try {
+          const band = new ImageData(new Uint8ClampedArray(err.data, 0, w * n * 4), w, n);
+          const bytes = new Uint8Array(await encode('jpeg', band, s, quality, true));
+          strips[k] = bytes;
+          stats[k] = stripStats(bytes);
+          if (scored(k)) {
+            const part = ssimParts(band, await decodeEncoded(bytes.buffer as ArrayBuffer, 'jpeg'));
+            sum += part.sum;
+            count += part.count;
+          }
+          free.push(err.data);
+        } catch (again) {
+          failure ??= again;
+        }
       })
       .finally(() => inFlight.delete(job));
     inFlight.add(job);
@@ -333,7 +368,7 @@ async function encodeBands(
 export async function compressLarge(src: LargeSource, s: Settings, wantThumb: boolean, threads: number) {
   // `threads` is how many cores this job may use (the pool shares them between running jobs).
   // Decoding can't be split, so it keeps one core and the rest compress bands.
-  const helpers = new BandEncoders(threads >= 3 ? threads - 1 : threads === 2 ? 2 : 0);
+  const helpers = await BandEncoders.open(threads >= 3 ? threads - 1 : threads === 2 ? 2 : 0);
   try {
     let quality = s.quality;
     const thumb = wantThumb ? new ThumbSink(src.width, src.height, 192) : null;
