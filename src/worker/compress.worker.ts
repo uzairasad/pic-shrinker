@@ -18,6 +18,7 @@ import {
   orientationExif,
   orientImage,
   readWhole,
+  setHelperProvider,
   swapsSides,
   type LargeSource,
 } from './large.ts';
@@ -36,6 +37,13 @@ export interface JobRequest {
 export type JobResponse =
   | { jobId: number; ok: true; result: CompressResult }
   | { jobId: number; ok: false; error: string; fatal?: boolean };
+
+/**
+ * Band helpers for a large picture (see large.ts / band.worker.ts). The job asks the page for up
+ * to `count`; the page answers with a port per helper that started, and stops them on `done`.
+ */
+export type HelperMessage = { type: 'helpers'; jobId: number; count: number } | { type: 'helpers-done'; jobId: number };
+export type HelperReply = { type: 'helper-ports'; jobId: number; ports: MessagePort[] };
 
 const MIME: Record<EncodableFormat, string> = {
   jpeg: 'image/jpeg',
@@ -376,8 +384,29 @@ function friendlyError(message: string): { error: string; fatal: boolean } {
   return { error: message, fatal: false };
 }
 
-self.onmessage = async (e: MessageEvent<JobRequest>) => {
+const scope = self as unknown as DedicatedWorkerGlobalScope;
+let currentJob = 0;
+const portRequests = new Map<number, (ports: MessagePort[]) => void>();
+
+setHelperProvider(async (count) => {
+  const jobId = currentJob;
+  const ports = await new Promise<MessagePort[]>((resolve) => {
+    portRequests.set(jobId, resolve);
+    scope.postMessage({ type: 'helpers', jobId, count } satisfies HelperMessage);
+  });
+  return { ports, release: () => scope.postMessage({ type: 'helpers-done', jobId } satisfies HelperMessage) };
+});
+
+self.onmessage = async (e: MessageEvent<JobRequest | HelperReply>) => {
+  if ('type' in e.data) {
+    if (e.data.type === 'helper-ports') {
+      portRequests.get(e.data.jobId)?.(e.data.ports);
+      portRequests.delete(e.data.jobId);
+    }
+    return;
+  }
   const req = e.data;
+  currentJob = req.jobId;
   try {
     const result = await run(req);
     const transfer: Transferable[] = [result.bytes];

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.2 — 2026-11-14
+
+- **Fixed: large pictures failed with "Not enough memory" in the apps** (phone and desktop),
+  even ones that fit easily. The parallel band helpers added in 0.2.1 were started from inside
+  a background worker, which the system web engines the apps use don't allow, and the job
+  then failed instead of carrying on. Helpers are now started by the app itself; any that can't
+  start are skipped, and a band a helper can't compress is compressed by the job instead.
+- Phones and low-memory devices use at most two helpers, to keep memory use down.
+- **Fixed: on phones the top bar was hidden under the status bar and camera cutout.** The app
+  now leaves room for them (and for the gesture bar), including on Android WebViews that don't
+  report that space.
+
 ## 0.2.1 — 2026-11-14
 
 - **Large maps compress 2–3× faster, more on machines with more cores.** A large picture's

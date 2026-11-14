@@ -53,6 +53,10 @@ Windows, macOS and Linux. `cargo clippy` needs `dist/` to exist (run `npm run bu
   an Emscripten abort poisons the module (the worker reports `fatal` and the pool replaces it).
   Our decoder's pixels are as stored: no EXIF rotation, no colour conversion, so orientation and
   ICC always go into large outputs. Bands are multiples of 16 rows (whole MCUs) for the joiner.
+- Never start a worker from inside a worker: WKWebView and Android WebView don't reliably allow
+  it (0.2.1 failed on every app because of this, while Chromium tests passed). Band helpers are
+  started by the page (`pool.ts`, `lendHelpers`) and connected to the job with MessagePorts;
+  a job must still finish with no helpers at all.
 - Short windows (display scaling 150–200%): use the `short:` variant (max-height 600px) and let
   content scroll rather than centre-and-clip. Rust shrinks the window to the monitor's work area
   at launch (`fit_window_to_screen`).

@@ -1,7 +1,7 @@
 {
   "name": "pic-shrinker",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Pic Shrinker: fast, private image compression for Windows, macOS, Linux, Android and the web. MozJPEG, WebP, AVIF and OxiPNG, with live before/after preview. Created by Uzair Asad.",
   "author": "Uzair Asad",
   "license": "GPL-3.0-or-later",
