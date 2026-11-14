@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { encodeTable, optimalTable } from './jpeg-huffman.ts';
-import { joinJpegStrips } from './jpeg-join.ts';
+import { joinJpegStrips, stripStats } from './jpeg-join.ts';
 import { JpegStreamDecoder, readJpegInfo } from './jpeg-stream.ts';
 import { AreaResizer, readAll, type LineSource } from './rows.ts';
 
@@ -97,6 +97,13 @@ test('joining colour strips keeps the picture (chroma blends across the seams)',
   assert.deepEqual(readJpegInfo(joined), { width: W, height: H, components: 3, progressive: false });
   assert.ok(meanDiff(decode(joined).out, out) < 1);
   assert.ok(meanDiff(decode(joined).out, expected()) < 4);
+});
+
+test('joining with per-strip counts gives the same file as counting at join time', () => {
+  for (const prefix of ['strip-gray', 'strip-colour']) {
+    const { parts } = stacked(prefix);
+    assert.deepEqual(joinJpegStrips(parts, parts.map(stripStats)), joinJpegStrips(parts));
+  }
 });
 
 test('refuses strips that cannot be joined', () => {

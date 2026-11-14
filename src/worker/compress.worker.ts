@@ -29,6 +29,8 @@ export interface JobRequest {
   settings: Settings;
   wantThumb: boolean;
   wantPreview: boolean;
+  /** Cores this job may use for a large picture's bands (the pool divides them between jobs). */
+  threads?: number;
 }
 
 export type JobResponse =
@@ -321,7 +323,7 @@ async function runLarge(
       `This picture (${o.dims.width}×${o.dims.height}) is too large to save as ${FORMAT_NAME[fmt]}. Choose JPEG, or resize it to under ${mp} megapixels.`,
     );
   }
-  const out = await compressLarge(src, s, req.wantThumb);
+  const out = await compressLarge(src, s, req.wantThumb, req.threads ?? 1);
   let bytes: Uint8Array = out.bytes;
 
   // Metadata. The pixels are as stored (not turned upright, not colour-converted), so the

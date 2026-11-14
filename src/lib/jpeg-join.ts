@@ -152,8 +152,53 @@ function sameBytes(a: Uint8Array, b: Uint8Array) {
   return true;
 }
 
-/** One JPEG of the strips stacked top to bottom. */
-export function joinJpegStrips(strips: Uint8Array[]): Uint8Array {
+/**
+ * Symbol counts of one strip, gathered where the strip was encoded (in parallel) so the join only
+ * has to read the strips once. DC differences are counted as if each strip started from zero;
+ * `first`/`last` DC values let the join correct the first block of every strip.
+ */
+export interface StripStats {
+  dc: Float64Array[];
+  ac: Float64Array[];
+  first: Int32Array;
+  last: Int32Array;
+}
+
+/** Table slot per component: luma (0) or chroma (1). */
+const slotOf = (ci: number) => (ci === 0 ? 0 : 1);
+
+/** Null when the strip can't be counted on its own (restart markers reset DC prediction). */
+export function stripStats(bytes: Uint8Array): StripStats | null {
+  const s = parseStrip(bytes);
+  if (s.restartInterval) return null;
+  const n = s.comps.length;
+  const slots = n > 1 ? 2 : 1;
+  const stats: StripStats = {
+    dc: Array.from({ length: slots }, () => new Float64Array(256)),
+    ac: Array.from({ length: slots }, () => new Float64Array(256)),
+    first: new Int32Array(n),
+    last: new Int32Array(n),
+  };
+  const seen = new Uint8Array(n);
+  walkStrip(
+    s,
+    (ci, dc) => {
+      stats.dc[slotOf(ci)][category(dc - stats.last[ci])]++;
+      if (!seen[ci]) ((seen[ci] = 1), (stats.first[ci] = dc));
+      stats.last[ci] = dc;
+    },
+    (ci, rs) => {
+      stats.ac[slotOf(ci)][rs]++;
+    },
+  );
+  return stats;
+}
+
+/**
+ * One JPEG of the strips stacked top to bottom. With `stats` for every strip (from stripStats),
+ * the strips are read once instead of twice.
+ */
+export function joinJpegStrips(strips: Uint8Array[], stats?: (StripStats | null)[]): Uint8Array {
   if (!strips.length) throw new JpegError('Nothing to join.');
   const infos = strips.map(parseStrip);
   const first = infos[0];
@@ -177,8 +222,25 @@ export function joinJpegStrips(strips: Uint8Array[]): Uint8Array {
   const dcFreq = Array.from({ length: nSlots }, () => new Float64Array(256));
   const acFreq = Array.from({ length: nSlots }, () => new Float64Array(256));
 
-  // Pass 1: symbol statistics.
-  {
+  // Pass 1: symbol statistics (already counted per strip, or counted here).
+  if (stats && stats.length === infos.length && stats.every((x) => x && x.dc.length === nSlots)) {
+    const all = stats as StripStats[];
+    all.forEach((st, k) => {
+      for (let i = 0; i < nSlots; i++) {
+        for (let v = 0; v < 256; v++) {
+          dcFreq[i][v] += st.dc[i][v];
+          acFreq[i][v] += st.ac[i][v];
+        }
+      }
+      if (k === 0) return;
+      // The strip counted its first block against 0; in the joined file it follows the last
+      // block of the strip above.
+      for (let ci = 0; ci < first.comps.length; ci++) {
+        dcFreq[slot[ci]][category(st.first[ci])]--;
+        dcFreq[slot[ci]][category(st.first[ci] - all[k - 1].last[ci])]++;
+      }
+    });
+  } else {
     const gpred = new Int32Array(first.comps.length);
     for (const s of infos) {
       walkStrip(

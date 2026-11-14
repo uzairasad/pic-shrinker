@@ -194,17 +194,47 @@ function idct(c: Int16Array, off: number, q: Uint16Array, out: Uint8ClampedArray
   }
 }
 
+// YCbCr → RGB lookup tables (as libjpeg's jdcolor.c), and a clamp table for the sums.
+const CR_R = new Int32Array(256);
+const CB_B = new Int32Array(256);
+const CR_G = new Int32Array(256);
+const CB_G = new Int32Array(256);
+for (let i = 0; i < 256; i++) {
+  const v = i - 128;
+  CR_R[i] = Math.round(1.402 * v);
+  CB_B[i] = Math.round(1.772 * v);
+  CR_G[i] = Math.round(-0.714136 * v * 65536);
+  CB_G[i] = Math.round(-0.344136 * v * 65536) + 32768;
+}
+const CLAMP_OFFSET = 384;
+const CLAMP = new Uint8Array(1024);
+for (let i = 0; i < 1024; i++) CLAMP[i] = Math.max(0, Math.min(255, i - CLAMP_OFFSET));
+
+/**
+ * Doubles a line's width with ¾ + ¼ weights (the usual 2× chroma subsampling; the same result as
+ * the general bilinear path, without its index tables). `shift`/`round` undo the input's scale
+ * plus the 4 of the weights.
+ */
+function widen2(src: ArrayLike<number>, so: number, n: number, dst: Uint8Array, W: number, shift: number, round: number) {
+  const last = n - 1;
+  for (let j = 0, x = 0; j < n && x < W; j++, x += 2) {
+    const c3 = 3 * src[so + j];
+    dst[x] = (c3 + src[so + (j > 0 ? j - 1 : 0)] + round) >> shift;
+    if (x + 1 < W) dst[x + 1] = (c3 + src[so + (j < last ? j + 1 : last)] + round) >> shift;
+  }
+}
+
 /** Precomputed bilinear upsampling positions along one axis. */
 function upsampleAxis(outSize: number, inSize: number, factor: number, max: number) {
   const i0 = new Int32Array(outSize);
   const i1 = new Int32Array(outSize);
-  const w1 = new Float32Array(outSize);
+  const w1 = new Int32Array(outSize);
   for (let x = 0; x < outSize; x++) {
     const p = Math.max(0, ((x + 0.5) * factor) / max - 0.5);
     const a = Math.min(inSize - 1, Math.floor(p));
     i0[x] = a;
     i1[x] = Math.min(inSize - 1, a + 1);
-    w1[x] = p - a;
+    w1[x] = Math.round((p - a) * 256);
   }
   return { i0, i1, w1 };
 }
@@ -235,8 +265,8 @@ export class JpegStreamDecoder implements JpegInfo {
   /** Next picture line to hand out. */
   line = 0;
   private tmp = new Int32Array(64);
-  private rowBuf?: Uint8ClampedArray[];
-  private vline?: Float32Array[];
+  private rowBuf?: Uint8Array[];
+  private vline?: Int32Array[];
   private ups: ReturnType<typeof upsampleAxis>[] = [];
 
   constructor(data: Uint8Array) {
@@ -636,9 +666,11 @@ export class JpegStreamDecoder implements JpegInfo {
     const ycck = nc === 4 && this.adobe === 2;
     const lines: [Uint8ClampedArray, number][] = new Array(nc);
     const lines2: [Uint8ClampedArray, number][] = new Array(nc);
-    const wy = new Float32Array(nc);
-    const rowBuf = (this.rowBuf ??= comps.map(() => new Uint8ClampedArray(W)));
-    const vline = (this.vline ??= comps.map((c) => new Float32Array(c.cw)));
+    const wy = new Int32Array(nc);
+    const rowBuf = (this.rowBuf ??= comps.map(() => new Uint8Array(W)));
+    const vline = (this.vline ??= comps.map((c) => new Int32Array(c.cw)));
+    // Four bytes per pixel in one store (every platform we ship on is little-endian).
+    const px = out.byteOffset % 4 === 0 ? new Uint32Array(out.buffer, out.byteOffset, out.length >> 2) : null;
     for (let k = 0; k < n; k++) {
       const y = this.line + k;
       // Lines near the bottom of an MCU row interpolate with the next row: have it ready.
@@ -654,29 +686,40 @@ export class JpegStreamDecoder implements JpegInfo {
           const a = Math.floor(p);
           lines[ci] = this.compLine(c, a);
           lines2[ci] = this.compLine(c, a + 1);
-          wy[ci] = p - a;
+          wy[ci] = Math.round((p - a) * 256);
         }
-        // Vertical blend first (at the channel's own width), then widen to the full line.
+        // Vertical blend first (at the channel's own width), then widen to the full line. Integer
+        // weights out of 256: exact for the usual 2× (¾ + ¼) and much faster than floats.
         const [pl, po] = lines[ci];
         const dst = rowBuf[ci];
         const w = wy[ci];
-        let srcLine: Uint8ClampedArray | Float32Array = pl;
-        let so = po;
-        if (w) {
+        if (!w) {
+          if (c.h === this.hmax) {
+            dst.set(pl.subarray(po, po + W));
+          } else if (c.h * 2 === this.hmax) {
+            widen2(pl, po, c.cw, dst, W, 2, 2);
+          } else {
+            const { i0, i1, w1 } = this.ups[ci];
+            for (let x = 0; x < W; x++) {
+              const l = pl[po + i0[x]];
+              dst[x] = (l * 256 + (pl[po + i1[x]] - l) * w1[x] + 128) >> 8;
+            }
+          }
+        } else {
           const [pl2, po2] = lines2[ci];
           const v = vline[ci];
-          for (let x = 0; x < c.cw; x++) v[x] = pl[po + x] + (pl2[po2 + x] - pl[po + x]) * w;
-          srcLine = v;
-          so = 0;
-        }
-        if (c.h === this.hmax) {
-          if (srcLine === pl) dst.set(pl.subarray(po, po + W));
-          else for (let x = 0; x < W; x++) dst[x] = srcLine[x];
-        } else {
-          const { i0, i1, w1 } = this.ups[ci];
-          for (let x = 0; x < W; x++) {
-            const l = srcLine[so + i0[x]];
-            dst[x] = l + (srcLine[so + i1[x]] - l) * w1[x];
+          for (let x = 0; x < c.cw; x++) v[x] = pl[po + x] * 256 + (pl2[po2 + x] - pl[po + x]) * w;
+          if (c.h === this.hmax) {
+            for (let x = 0; x < W; x++) dst[x] = (v[x] + 128) >> 8;
+          } else if (c.h * 2 === this.hmax) {
+            // `v` is scaled by 256 from the vertical blend.
+            widen2(v, 0, c.cw, dst, W, 10, 512);
+          } else {
+            const { i0, i1, w1 } = this.ups[ci];
+            for (let x = 0; x < W; x++) {
+              const l = v[i0[x]];
+              dst[x] = (l * 256 + (v[i1[x]] - l) * w1[x] + 32768) >> 16;
+            }
           }
         }
       }
@@ -695,6 +738,19 @@ export class JpegStreamDecoder implements JpegInfo {
             out[o + 1] = Cb[x];
             out[o + 2] = Cr[x];
             out[o + 3] = 255;
+          }
+        } else if (px) {
+          // libjpeg's fixed-point YCbCr → RGB, one 32-bit store per pixel.
+          let p = o >> 2;
+          for (let x = 0; x < W; x++, p++) {
+            const yy = Y[x] + CLAMP_OFFSET;
+            const cb = Cb[x];
+            const cr = Cr[x];
+            px[p] =
+              0xff000000 |
+              (CLAMP[yy + CB_B[cb]] << 16) |
+              (CLAMP[yy + ((CB_G[cb] + CR_G[cr]) >> 16)] << 8) |
+              CLAMP[yy + CR_R[cr]];
           }
         } else {
           for (let x = 0; x < W; x++, o += 4) {

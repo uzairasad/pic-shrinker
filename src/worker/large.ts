@@ -10,11 +10,12 @@
  *   if it's small enough, it goes through the normal pipeline like any other picture.
  */
 import { JpegStreamDecoder, readJpegInfo, type JpegInfo } from '../lib/jpeg-stream.ts';
-import { joinJpegStrips } from '../lib/jpeg-join.ts';
+import { joinJpegStrips, type StripStats } from '../lib/jpeg-join.ts';
 import { AreaResizer, readAll, type LineSource } from '../lib/rows.ts';
 import { ssimParts } from '../lib/ssim.ts';
 import type { Settings } from '../lib/types.ts';
 import { decodeEncoded } from './decode.ts';
+import type { BandRequest, BandResponse } from './band.worker.ts';
 import { bisectForSize, encode, lookQuality, RANGE } from './encode.ts';
 
 /**
@@ -159,9 +160,9 @@ function fill(src: LineSource, buf: Uint8ClampedArray, rows: number) {
   }
 }
 
-function bandRows(width: number) {
+function bandRows(width: number, pixels = BAND_PIXELS) {
   // A multiple of 16 so every band ends on a whole JPEG block row (4:2:0 MCUs are 16 high).
-  return Math.max(16, Math.floor(BAND_PIXELS / width / 16) * 16);
+  return Math.max(16, Math.floor(pixels / width / 16) * 16);
 }
 
 /** Four full-resolution tiles from across the picture, to search for a quality on. */
@@ -188,47 +189,164 @@ function proxyOf(src: LargeSource): ImageData {
   return new ImageData(out, ow, ow);
 }
 
+/**
+ * Helper workers (band.worker.ts) that compress bands in parallel. Nested workers exist in every
+ * engine we ship on, but if one can't be started the bands are simply compressed here.
+ */
+class BandEncoders {
+  private idle: Worker[] = [];
+  private all: Worker[] = [];
+  private waiting: ((w: Worker) => void)[] = [];
+  private nextId = 1;
+
+  constructor(count: number) {
+    if (typeof Worker === 'undefined') return;
+    for (let i = 0; i < count; i++) {
+      try {
+        const w = new Worker(new URL('./band.worker.ts', import.meta.url), { type: 'module' });
+        this.all.push(w);
+        this.idle.push(w);
+      } catch {
+        break;
+      }
+    }
+  }
+
+  get size() {
+    return this.all.length;
+  }
+
+  private take(): Promise<Worker> {
+    const w = this.idle.pop();
+    return w ? Promise.resolve(w) : new Promise((resolve) => this.waiting.push(resolve));
+  }
+
+  private give(w: Worker) {
+    const next = this.waiting.shift();
+    if (next) next(w);
+    else this.idle.push(w);
+  }
+
+  async run(req: Omit<BandRequest, 'id'>): Promise<Extract<BandResponse, { ok: true }>> {
+    const w = await this.take();
+    const id = this.nextId++;
+    try {
+      return await new Promise((resolve, reject) => {
+        w.onmessage = (e: MessageEvent<BandResponse>) => {
+          if (e.data.id !== id) return;
+          if (e.data.ok) resolve(e.data);
+          else reject(new Error(e.data.error));
+        };
+        w.onerror = (e) => reject(new Error(e.message || 'Not enough memory to compress this picture.'));
+        w.postMessage({ ...req, id } satisfies BandRequest, [req.data]);
+      });
+    } finally {
+      this.give(w);
+    }
+  }
+
+  dispose() {
+    for (const w of this.all) w.terminate();
+    this.all = [];
+    this.idle = [];
+  }
+}
+
 /** Encodes the whole picture in bands at `quality` and joins them. */
-async function encodeBands(src: LargeSource, s: Settings, quality: number, opts: { score: boolean; thumb: ThumbSink | null }) {
+async function encodeBands(
+  src: LargeSource,
+  s: Settings,
+  quality: number,
+  helpers: BandEncoders,
+  opts: { score: boolean; thumb: ThumbSink | null },
+) {
   const { width: w, height: h } = src;
-  const rowsPer = bandRows(w);
-  const buf = new Uint8ClampedArray(w * rowsPer * 4);
+  // Smaller bands when several are in flight, to keep memory in check.
+  const rowsPer = bandRows(w, helpers.size > 1 ? BAND_PIXELS / 2 : BAND_PIXELS);
+  const bandBytes = w * rowsPer * 4;
+  // The similarity score is measured on up to 16 bands spread down the picture: decoding every
+  // band again just to score it would add about 15% to the whole job.
+  const bands = Math.ceil(h / rowsPer);
+  const scoreEvery = Math.max(1, Math.floor(bands / 16));
+  const scored = (k: number) => opts.score && k % scoreEvery === 0;
   const lines = src.open();
   const strips: Uint8Array[] = [];
   let sum = 0;
   let count = 0;
-  for (let y = 0; y < h; y += rowsPer) {
-    const n = Math.min(rowsPer, h - y);
-    fill(lines, buf, n);
-    const band = new ImageData(new Uint8ClampedArray(buf.buffer, 0, w * n * 4), w, n);
-    opts.thumb?.add(band.data, y, n);
-    const bytes = await encode('jpeg', band, s, quality, true);
-    if (opts.score) {
-      const back = await decodeEncoded(bytes, 'jpeg');
-      const part = ssimParts(band, back);
-      sum += part.sum;
-      count += part.count;
+
+  if (!helpers.size) {
+    const buf = new Uint8ClampedArray(bandBytes);
+    for (let y = 0, k = 0; y < h; y += rowsPer, k++) {
+      const n = Math.min(rowsPer, h - y);
+      fill(lines, buf, n);
+      const band = new ImageData(new Uint8ClampedArray(buf.buffer, 0, w * n * 4), w, n);
+      opts.thumb?.add(band.data, y, n);
+      const bytes = await encode('jpeg', band, s, quality, true);
+      if (scored(k)) {
+        const part = ssimParts(band, await decodeEncoded(bytes, 'jpeg'));
+        sum += part.sum;
+        count += part.count;
+      }
+      strips.push(new Uint8Array(bytes));
     }
-    strips.push(new Uint8Array(bytes));
+    return { bytes: joinJpegStrips(strips), ssim: count ? sum / count : 1 };
   }
-  const joined = joinJpegStrips(strips);
-  return { bytes: joined, ssim: count ? sum / count : 1 };
+
+  // Decoding is sequential; it runs here while the helpers compress the bands already read.
+  // At most one band per helper (plus the one being read) is in memory at a time.
+  const free: ArrayBuffer[] = [];
+  const stats: (StripStats | null)[] = [];
+  const inFlight = new Set<Promise<void>>();
+  let failure: unknown = null;
+  for (let y = 0, k = 0; y < h; y += rowsPer, k++) {
+    while (inFlight.size >= helpers.size) await Promise.race(inFlight);
+    if (failure) break;
+    const n = Math.min(rowsPer, h - y);
+    const buffer = free.pop() ?? new ArrayBuffer(bandBytes);
+    const view = new Uint8ClampedArray(buffer, 0, w * n * 4);
+    fill(lines, view, n);
+    opts.thumb?.add(view, y, n);
+    const job = helpers
+      .run({ data: buffer, width: w, height: n, settings: s, quality, score: scored(k) })
+      .then((r) => {
+        strips[k] = new Uint8Array(r.bytes);
+        stats[k] = r.stats;
+        sum += r.sum;
+        count += r.count;
+        free.push(r.data);
+      })
+      .catch((err) => {
+        failure ??= err;
+      })
+      .finally(() => inFlight.delete(job));
+    inFlight.add(job);
+  }
+  await Promise.all(inFlight);
+  if (failure) throw failure;
+  return { bytes: joinJpegStrips(strips, stats), ssim: count ? sum / count : 1 };
 }
 
 /**
  * Compresses a large picture to JPEG without ever holding it whole. Returns the joined file, the
  * quality used, its SSIM and a thumbnail.
  */
-export async function compressLarge(src: LargeSource, s: Settings, wantThumb: boolean) {
-  let quality = s.quality;
-  const thumb = wantThumb ? new ThumbSink(src.width, src.height, 192) : null;
-  if (s.mode === 'auto') {
-    quality = await lookQuality('jpeg', proxyOf(src), s, s.autoTarget);
-  } else if (s.mode === 'size') {
-    return sizeSearch(src, s, thumb);
+export async function compressLarge(src: LargeSource, s: Settings, wantThumb: boolean, threads: number) {
+  // `threads` is how many cores this job may use (the pool shares them between running jobs).
+  // Decoding can't be split, so it keeps one core and the rest compress bands.
+  const helpers = new BandEncoders(threads >= 3 ? threads - 1 : threads === 2 ? 2 : 0);
+  try {
+    let quality = s.quality;
+    const thumb = wantThumb ? new ThumbSink(src.width, src.height, 192) : null;
+    if (s.mode === 'auto') {
+      quality = await lookQuality('jpeg', proxyOf(src), s, s.autoTarget);
+    } else if (s.mode === 'size') {
+      return await sizeSearch(src, s, thumb, helpers);
+    }
+    const result = await encodeBands(src, s, quality, helpers, { score: true, thumb });
+    return { ...result, quality, thumb: thumb?.image() ?? null };
+  } finally {
+    helpers.dispose();
   }
-  const result = await encodeBands(src, s, quality, { score: true, thumb });
-  return { ...result, quality, thumb: thumb?.image() ?? null };
 }
 
 /**
@@ -236,14 +354,14 @@ export async function compressLarge(src: LargeSource, s: Settings, wantThumb: bo
  * runs on the tile sample, and the first full pass calibrates it (the sample's bytes per pixel
  * differ from the whole picture's): usually two or three passes in all.
  */
-async function sizeSearch(src: LargeSource, s: Settings, thumb: ThumbSink | null) {
+async function sizeSearch(src: LargeSource, s: Settings, thumb: ThumbSink | null, helpers: BandEncoders) {
   const [min, max] = RANGE.jpeg;
   const target = s.targetKB * 1024;
   const proxy = proxyOf(src);
   const area = (proxy.width * proxy.height) / (src.width * src.height);
   const guess = await bisectForSize('jpeg', proxy, s, target * area, min, max);
   let quality = guess.best?.quality ?? min;
-  let result = await encodeBands(src, s, quality, { score: true, thumb });
+  let result = await encodeBands(src, s, quality, helpers, { score: true, thumb });
 
   // How much bigger (or smaller) the whole picture is than the sample predicts, at this quality.
   const predicted = (guess.best ?? guess.smallest).bytes.byteLength / area;
@@ -252,7 +370,7 @@ async function sizeSearch(src: LargeSource, s: Settings, thumb: ThumbSink | null
   if (Math.abs(factor - 1) > 0.05) {
     const again = (await bisectForSize('jpeg', proxy, s, (target * area) / factor, min, max)).best?.quality ?? min;
     if (again !== quality && (again > quality || !fits(result))) {
-      const r = await encodeBands(src, s, again, { score: true, thumb: null });
+      const r = await encodeBands(src, s, again, helpers, { score: true, thumb: null });
       // Keep the better of the two that fit (or the smaller, if neither does).
       if (fits(r) ? !fits(result) || again > quality : !fits(result) && r.bytes.byteLength < result.bytes.byteLength) {
         result = r;
@@ -262,7 +380,7 @@ async function sizeSearch(src: LargeSource, s: Settings, thumb: ThumbSink | null
   }
   for (let tries = 0; tries < 3 && !fits(result) && quality > 1; tries++) {
     quality = Math.max(1, quality - (quality > min ? 5 : 4));
-    result = await encodeBands(src, s, quality, { score: true, thumb: null });
+    result = await encodeBands(src, s, quality, helpers, { score: true, thumb: null });
   }
   return { ...result, quality, thumb: thumb?.image() ?? null };
 }
