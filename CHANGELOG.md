@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.4 — 2026-11-15
+
+- **Fixed: the app icon was cut off on Android.** Launchers show only the middle of an icon, in
+  a circle or rounded square, and the old icon's corner arrows fell outside it. The picture and
+  arrows now sit inside that area, so the icon looks whole on every phone. The desktop, web app
+  and browser-tab icons use the new design too.
+- Releases are sturdier: a release that fails partway is finished on the next update instead of
+  being left unpublished.
+
 ## 0.2.3 — 2026-11-14
 
 - **Fixed: very large pictures came out with stripes of coloured noise.** A 500-megapixel
