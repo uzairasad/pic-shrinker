@@ -1,0 +1,16 @@
+# Web
+node_modules/
+dist/
+dev-dist/
+coverage/
+.DS_Store
+*.log
+.env*
+.claude/
+
+# Rust / Tauri
+target/
+src-tauri/gen/schemas/
+# Android / iOS projects are generated in CI by `tauri android init` / `tauri ios init`.
+src-tauri/gen/android/
+src-tauri/gen/apple/

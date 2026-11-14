@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Pic Shrinker – fast, private image compression</title>
+    <meta name="author" content="Uzair Asad" />
+    <meta name="description" content="Pic Shrinker by Uzair Asad: compress JPEG, PNG, WebP, AVIF and HEIC pictures on your own device with MozJPEG, WebP, AVIF and OxiPNG. Live before/after preview, batch folders, target file size. Free and open source." />
+    <meta name="theme-color" content="#0b0c11" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Pic Shrinker" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="alternate icon" href="/favicon.ico" />
+    <script>
+      // Pick the theme before the first paint, so there's no white flash in dark mode.
+      try {
+        var t = localStorage.getItem('pic-shrinker:theme') || 'system';
+        if (t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches))
+          document.documentElement.classList.add('dark');
+      } catch (e) {}
+    </script>
+    <style>
+      html { background: #eef0f5; }
+      html.dark { background: #0b0c11; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

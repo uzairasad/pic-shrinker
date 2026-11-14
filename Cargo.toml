@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+authors = ["Uzair Asad"]
+publish = false
+license = "GPL-3.0-or-later"
+homepage = "https://uzairasad.github.io/pic-shrinker/"
+repository = "https://github.com/uzairasad/pic-shrinker"
+
+[profile.release]
+# Small, fast desktop binaries.
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

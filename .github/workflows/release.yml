@@ -1,0 +1,262 @@
+# Builds the downloads on GitHub's servers from this repository's source:
+#   Windows  - setup.exe (NSIS), .msi, and a portable .zip
+#   macOS    - .dmg for Apple Silicon and for Intel
+#   Linux    - .AppImage, .deb, .rpm
+#   Android  - release-signed .apk for 64-bit ARM phones (sideload); a failure here never blocks
+#              a release
+# Code signing uses repository secrets when they're set and is skipped when they aren't; see
+# docs/SIGNING.md. The Android key is set; Windows and macOS need paid certificates.
+# A pushed tag vX.Y.Z (matching package.json's version) publishes a GitHub release with them and
+# SHA256SUMS.txt. Run by hand (Actions > Release > Run workflow) it only builds and keeps the
+# files as workflow artifacts; nothing is published. Tick "android_only" to build just the APK.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      android_only:
+        description: Build only the Android APK (quick check, no desktop builds)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          v=$(node -p "require('./package.json').version")
+          [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} but package.json says $v"; exit 1; }
+
+  desktop:
+    needs: check-version
+    if: ${{ !inputs.android_only }}
+    permissions:
+      contents: write # uploads to the draft release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: windows-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            label: macos-apple-silicon
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            label: macos-intel
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            label: linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux webview libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf rpm
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - run: npm ci
+
+      # Signs only when the secrets exist (docs/SIGNING.md); otherwise builds unsigned.
+      - name: Code signing setup
+        id: signing
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_CERT_PROFILE: ${{ vars.AZURE_CERT_PROFILE }}
+        run: |
+          export_vars() { for v in "$@"; do [ -n "${!v}" ] && echo "$v=${!v}" >> "$GITHUB_ENV"; done; return 0; }
+          if [ "$RUNNER_OS" = macOS ] && [ -n "$APPLE_CERTIFICATE" ]; then
+            echo "Signing (and notarizing, if APPLE_ID is set) the macOS app"
+            export_vars APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+          elif [ "$RUNNER_OS" = Windows ] && [ -n "$AZURE_CLIENT_ID" ]; then
+            echo "Signing the Windows app with Azure Trusted Signing"
+            cargo install trusted-signing-cli --locked
+            export_vars AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID
+            node -e "require('fs').writeFileSync('signing.json', JSON.stringify({bundle:{windows:{signCommand:
+              'trusted-signing-cli -e ' + process.env.AZURE_SIGNING_ENDPOINT + ' -a ' + process.env.AZURE_SIGNING_ACCOUNT +
+              ' -c ' + process.env.AZURE_CERT_PROFILE + ' -d \"Pic Shrinker\" %1'}}}))"
+            echo "args=--config signing.json" >> "$GITHUB_OUTPUT"
+          else
+            echo "No signing secrets for $RUNNER_OS: building unsigned"
+          fi
+
+      - name: Build installers
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tauriScript: npx tauri
+          args: --target ${{ matrix.target }} ${{ steps.signing.outputs.args }}
+          # On a tag: attach to a draft release that the publish job finalises.
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          releaseName: Pic Shrinker ${{ github.ref_name }}
+          releaseBody: See CHANGELOG.md. Verify downloads against SHA256SUMS.txt.
+          releaseDraft: true
+          prerelease: false
+
+      - name: Portable zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $v = node -p "require('./package.json').version"
+          $dir = "Pic-Shrinker-$v-portable"
+          New-Item -ItemType Directory $dir | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/pic-shrinker.exe" "$dir/Pic Shrinker.exe"
+          "Portable Pic Shrinker. Needs Microsoft Edge WebView2 (built into Windows 10/11)." | Out-File "$dir/README.txt" -Encoding utf8
+          Compress-Archive -Path $dir -DestinationPath "$dir-windows-x64.zip"
+
+      - name: Attach portable zip
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" (Get-ChildItem *-portable-windows-x64.zip).FullName --clobber
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pic-shrinker-${{ matrix.label }}
+          path: |
+            target/${{ matrix.target }}/release/bundle/**/*.exe
+            target/${{ matrix.target }}/release/bundle/**/*.msi
+            target/${{ matrix.target }}/release/bundle/**/*.dmg
+            target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            target/${{ matrix.target }}/release/bundle/**/*.deb
+            target/${{ matrix.target }}/release/bundle/**/*.rpm
+            *-portable-windows-x64.zip
+          if-no-files-found: ignore
+          retention-days: 14
+
+  android:
+    needs: check-version
+    continue-on-error: true
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      # The ubuntu runner ships the Android SDK (ANDROID_HOME); only the NDK is added.
+      - name: NDK
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - name: Toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+      - run: npm ci
+      - name: Generate the Android project
+        run: |
+          npx tauri android init --ci
+          npx tauri icon public/icon.svg
+      # 64-bit ARM only (virtually every phone since 2017). Release build signed with the
+      # project's key (docs/SIGNING.md), so later versions install as updates. Without the key
+      # (a fork, say) it falls back to a lean debug-signed build.
+      - name: Build APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          # Not a secret (it would mask the word everywhere in the logs).
+          ANDROID_KEY_ALIAS: picshrinker
+        run: |
+          v=$(node -p "require('./package.json').version")
+          out="Pic-Shrinker-$v-android-arm64.apk"
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret: building a debug-signed APK"
+            export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_DEV_STRIP=symbols CARGO_PROFILE_DEV_OPT_LEVEL=s
+            npx tauri android build --apk --debug --target aarch64 --ci
+            cp "$(find src-tauri/gen/android -name '*-debug.apk' | head -n1)" "$out"
+          else
+            npx tauri android build --apk --target aarch64 --ci
+            apk=$(find src-tauri/gen/android -name '*-release-unsigned.apk' | head -n1)
+            bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.p12"
+            "$bt/zipalign" -f -p 4 "$apk" "$RUNNER_TEMP/aligned.apk"
+            "$bt/apksigner" sign --ks "$RUNNER_TEMP/release.p12" --ks-type PKCS12 \
+              --ks-pass env:ANDROID_KEYSTORE_PASSWORD --ks-key-alias "$ANDROID_KEY_ALIAS" \
+              --out "$out" "$RUNNER_TEMP/aligned.apk"
+            rm -f "$RUNNER_TEMP/release.p12"
+            "$bt/apksigner" verify --print-certs "$out"
+          fi
+          ls -l "$out"
+      - name: Attach APK
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" Pic-Shrinker-*-android-arm64.apk --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pic-shrinker-android
+          path: Pic-Shrinker-*-android-arm64.apk
+          retention-days: 14
+
+  publish:
+    # Waits for the desktop builds; Android is best-effort (attached if it finished in time).
+    needs: [desktop, android]
+    if: always() && startsWith(github.ref, 'refs/tags/') && needs.desktop.result == 'success'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: SHA256SUMS.txt
+        run: |
+          mkdir assets && cd assets
+          gh release download "$GITHUB_REF_NAME" --pattern '*' --skip-existing
+          rm -f SHA256SUMS.txt *.sig
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          gh release upload "$GITHUB_REF_NAME" SHA256SUMS.txt --clobber
+      - name: Publish the release
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest
