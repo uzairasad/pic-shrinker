@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 — 2026-11-14
 
 - **Large maps compress 2–3× faster, more on machines with more cores.** A large picture's
   bands are now compressed on every core at once instead of one, while it is still being
