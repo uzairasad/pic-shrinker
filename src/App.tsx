@@ -7,6 +7,7 @@ import { EmptyState } from './components/EmptyState.tsx';
 import { FileList } from './components/FileList.tsx';
 import { Logo } from './components/Logo.tsx';
 import { SettingsPanel } from './components/SettingsPanel.tsx';
+import { useUpdates } from './components/Updates.tsx';
 import { Button, cx } from './components/ui.tsx';
 import { ACCEPT, filesFromClipboard, filesFromDataTransfer, filesFromInput, type PickedFile } from './lib/files.ts';
 import { formatBytes, formatSaving, outputName, uniqueNames } from './lib/format.ts';
@@ -14,6 +15,7 @@ import { CompressPool } from './lib/pool.ts';
 import { loadSettings, saveSettings } from './lib/settings.ts';
 import type { CompressResult, ImageItem, Settings } from './lib/types.ts';
 import { canPickFolder, isNativeApp, onFilesOpenedByOS, revealFolder, saveFile, saveMany } from './platform/native.ts';
+import { autoCheckDue } from './platform/updates.ts';
 
 type Theme = 'system' | 'light' | 'dark';
 type MobileTab = 'list' | 'view' | 'settings';
@@ -66,6 +68,8 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [mobileTab, setMobileTab] = useState<MobileTab>('list');
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const updates = useUpdates();
+  const updateReady = updates.status.kind === 'found';
 
   const pool = getPool();
 
@@ -85,6 +89,23 @@ export default function App() {
     setToasts((ts) => [...ts.slice(-2), { ...t, id }]);
     setTimeout(() => setToasts((ts) => ts.filter((x) => x.id !== id)), t.action ? 8000 : 4500);
   }, []);
+
+  // A quiet update check shortly after start-up (installed apps, at most daily, can be turned off).
+  const checkUpdates = updates.check;
+  useEffect(() => {
+    if (!autoCheckDue()) return;
+    const t = setTimeout(() => {
+      void checkUpdates(true).then((found) => {
+        if (found) {
+          toast({
+            text: found.version ? `Pic Shrinker ${found.version} is available` : 'A new version is available',
+            action: { label: 'Update', run: () => setAbout(true) },
+          });
+        }
+      });
+    }, 4000);
+    return () => clearTimeout(t);
+  }, [checkUpdates, toast]);
 
   // Settings changes are remembered, and recompress everything shortly after the last change.
   useEffect(() => {
@@ -324,7 +345,7 @@ export default function App() {
   return (
     <div className="flex h-full flex-col">
       {/* Top bar */}
-      <header className="flex h-14 shrink-0 items-center gap-1 sm:gap-2 border-b border-line bg-panel px-3 sm:px-4">
+      <header className="flex h-14 short:h-11 shrink-0 items-center gap-1 sm:gap-2 border-b border-line bg-panel px-3 sm:px-4">
         <div className="flex items-center gap-2.5 pr-1 sm:pr-2">
           <Logo size={30} />
           <span className="hidden text-[15px] font-semibold tracking-tight sm:inline">{APP_NAME}</span>
@@ -358,8 +379,9 @@ export default function App() {
               <ThemeIcon size={17} />
             </Button>
           </span>
-          <Button size="icon" onClick={() => setAbout(true)} title={`About ${APP_NAME}`}>
+          <Button size="icon" onClick={() => setAbout(true)} title={updateReady ? 'An update is available' : `About ${APP_NAME}`} className="relative">
             <Info size={17} />
+            {updateReady && <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-brand ring-2 ring-panel" />}
           </Button>
           {canPickFolder() && done.length > 1 && (
             <Button variant="soft" onClick={() => void saveAll(true)} disabled={saving} title="Save everything as one ZIP file" className="hidden sm:inline-flex">
@@ -440,7 +462,7 @@ export default function App() {
             key={tab}
             type="button"
             onClick={() => setMobileTab(tab)}
-            className={cx('flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium', mobileTab === tab ? 'text-brand' : 'text-muted')}
+            className={cx('flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium short:flex-row short:justify-center short:gap-2 short:py-1.5', mobileTab === tab ? 'text-brand' : 'text-muted')}
           >
             <Icon size={19} />
             {label}
@@ -487,7 +509,7 @@ export default function App() {
         ))}
       </div>
 
-      {about && <About onClose={() => setAbout(false)} />}
+      {about && <About onClose={() => setAbout(false)} updates={updates} />}
     </div>
   );
 }

@@ -29,15 +29,24 @@ export class CompressPool {
     for (let i = 0; i < size; i++) this.slots.push(this.spawn());
   }
 
-  private spawn(): Slot {
+  /** Starts a worker, in `existing` when replacing one (the slot object stays the one in `slots`). */
+  private spawn(existing?: Slot): Slot {
     const worker = new Worker(new URL('../worker/compress.worker.ts', import.meta.url), { type: 'module' });
-    const slot: Slot = { worker, busy: null, lastItem: null };
+    const slot: Slot = existing ?? { worker, busy: null, lastItem: null };
+    slot.worker = worker;
+    slot.busy = null;
+    slot.lastItem = null;
     worker.onmessage = (e: MessageEvent<JobResponse>) => {
       const job = slot.busy;
       slot.busy = null;
       if (job && job.jobId === e.data.jobId) {
         if (e.data.ok) job.resolve(e.data.result);
         else job.reject(new Error(e.data.error));
+      }
+      if (!e.data.ok && e.data.fatal) {
+        // A codec aborted (out of memory) and can't be used again: start this slot afresh.
+        worker.terminate();
+        this.spawn(slot);
       }
       this.pump();
     };
@@ -46,8 +55,7 @@ export class CompressPool {
       const job = slot.busy;
       slot.busy = null;
       worker.terminate();
-      const fresh = this.spawn();
-      Object.assign(slot, fresh);
+      this.spawn(slot);
       job?.reject(new Error(e.message || 'The compressor ran out of memory on this picture.'));
       this.pump();
     };

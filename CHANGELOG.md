@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.0 — 2026-11-14
+
+- **Very large JPEGs work.** Maps, scans and panoramas over 64 megapixels (tested at
+  20000×14000, 84 MB) used to fail with "Aborted()": the encoder ran out of memory. They are now
+  decoded, resized and encoded a band of rows at a time and joined into one JPEG, so memory use
+  stays low whatever the size. Large results are saved as baseline (not progressive) JPEG; to
+  save one as WebP, AVIF or PNG, resize it under 64 megapixels first (the app says so).
+- **Updates from inside the app.** About → Check for updates. The desktop apps download, verify
+  (signed), install and restart; the portable Windows copy, Linux .deb/.rpm and Android open the
+  download instead; the web app reloads into the new version. Installed apps also check quietly
+  at start-up, at most once a day (can be turned off in About).
+- **Fits the screen at high display scaling.** The window is sized to the monitor's work area
+  at launch (it used to open taller than a 1080p screen at 150%), its minimum size is smaller,
+  and short windows get a compact layout instead of cut-off content.
+- Out-of-memory errors now read as plain English, and the worker that hit one is replaced so
+  the next picture isn't affected. A replaced worker no longer leaves its next job hanging.
+
 ## 0.1.0 — 2026-11-14
 
 First release.

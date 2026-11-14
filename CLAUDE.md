@@ -28,9 +28,11 @@ Windows, macOS and Linux. `cargo clippy` needs `dist/` to exist (run `npm run bu
 | `src/worker/compress.worker.ts` | Engine: decode → resize → encode → metadata → SSIM; target-size and auto quality search |
 | `src/worker/decode.ts` | Sniffs bytes; browser decoders, jSquash, utif2 (TIFF), heic-to (HEIC) |
 | `src/lib/pool.ts` | Worker pool (one per core, max 6), affinity so a worker keeps its decoded picture |
+| `src/worker/large.ts` | Large JPEGs (> `LARGE_PIXELS`): banded encode via `jpeg-stream.ts` (streaming decoder), `rows.ts` (area resize), `jpeg-join.ts` (joins MozJPEG bands) |
 | `src/lib/metadata.ts` | Lossless JPEG EXIF/ICC copy, orientation reset, GPS removal (tested) |
 | `src/lib/ssim.ts`, `format.ts`, `settings.ts`, `types.ts` | SSIM + proxy tiles, naming/sizes, presets/defaults, types |
 | `src/components/` | CompareView (split viewer), SettingsPanel, FileList, EmptyState, About, `ui.tsx` primitives |
+| `src/platform/updates.ts`, `components/Updates.tsx` | Update check/install: Tauri updater (desktop), GitHub release (Android, fallback), service worker (web) |
 | `src/platform/native.ts` | Only place that talks to Tauri; falls back to browser APIs (File System Access, ZIP) |
 | `src-tauri/src/lib.rs` | Rust commands: save_file, pick_output_folder, write_output_file, reveal_folder, open_project_link, CLI/OS-opened files |
 | `site/index.html` | GitHub Pages landing page (download buttons resolve assets from the latest release) |
@@ -47,6 +49,13 @@ Windows, macOS and Linux. `cargo clippy` needs `dist/` to exist (run `npm run bu
   (`OutputFolders.allowed`), never overwrites (`free_path`), and sanitises relative paths.
 - MozJPEG extra trellis passes are off by default: they made encoding 2–3× slower.
 - Large images: quality searches run on `proxyImage` (4 full-res tiles) first, then confirm.
+- Pictures over `LARGE_PIXELS` (64 MP) must never be held whole: MozJPEG aborts past ~200 MP and
+  an Emscripten abort poisons the module (the worker reports `fatal` and the pool replaces it).
+  Our decoder's pixels are as stored: no EXIF rotation, no colour conversion, so orientation and
+  ICC always go into large outputs. Bands are multiples of 16 rows (whole MCUs) for the joiner.
+- Short windows (display scaling 150–200%): use the `short:` variant (max-height 600px) and let
+  content scroll rather than centre-and-clip. Rust shrinks the window to the monitor's work area
+  at launch (`fit_window_to_screen`).
 - Settings are stored in localStorage under a versioned key (`pic-shrinker:settings:v2`); bump
   it when changing defaults that should override saved values.
 
@@ -55,7 +64,9 @@ Windows, macOS and Linux. `cargo clippy` needs `dist/` to exist (run `npm run bu
 - TypeScript strict, React function components, Tailwind 4 with CSS-variable theme tokens
   (`bg-panel`, `text-muted`, `brand`…) defined in `src/index.css` for light and dark.
 - Comments explain *why*. User-facing text is plain English, British-ish spelling ("colour").
-- Keep everything on-device: no analytics, no network calls besides the site's GitHub API fetch.
+- Keep everything on-device: no analytics, no network calls besides the site's GitHub API fetch
+  and the update check (`src/platform/updates.ts`: on demand, or at start-up at most daily,
+  which the user can turn off in About).
 
 ## Releasing
 
