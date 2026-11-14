@@ -109,6 +109,9 @@ Tip: on the desktop you can pass pictures or folders on the command line
 - **Lossless metadata editing.** EXIF and ICC segments are copied from the original JPEG,
   cleaned (orientation reset, pixel size updated, GPS directory removed and zeroed) and written
   into the new file, in `src/lib/metadata.ts`.
+- **Updates.** The desktop apps install signed updates from GitHub releases (check in About, or
+  automatically at start-up, at most once a day; it can be turned off). The Android app opens
+  the new APK; the web app updates itself. The check only asks GitHub for the latest release.
 - **Small, safe native apps.** The Rust shell uses the web engine the system already has. The
   webview has no general file-system access: it can only write into a folder you picked in a
   dialog, and only read pictures you opened.

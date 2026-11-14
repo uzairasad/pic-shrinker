@@ -194,7 +194,7 @@ export function CompareView({ item, onSave }: { item: ImageItem; onSave: () => v
         )}
 
         {/* Zoom controls */}
-        <div className="absolute bottom-3 left-1/2 flex max-w-[calc(100%-16px)] -translate-x-1/2 items-center gap-0.5 sm:gap-1 rounded-2xl bg-panel/90 p-1 shadow-xl ring-1 ring-line backdrop-blur">
+        <div className="absolute bottom-3 short:bottom-2 left-1/2 flex max-w-[calc(100%-16px)] -translate-x-1/2 items-center gap-0.5 sm:gap-1 rounded-2xl bg-panel/90 p-1 shadow-xl ring-1 ring-line backdrop-blur">
           <Button size="icon" title="Zoom out (−)" onClick={() => zoomTo(zoom / 1.25)}>
             <Minus size={16} />
           </Button>
@@ -234,7 +234,7 @@ export function CompareView({ item, onSave }: { item: ImageItem; onSave: () => v
       </div>
 
       {/* Stats bar */}
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-line bg-panel px-4 py-2.5 text-[12.5px]">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-line bg-panel px-4 py-2.5 text-[12.5px] short:gap-x-4 short:gap-y-1 short:py-1.5">
         <div className="min-w-0 max-w-[40%] truncate font-medium" title={item.relativePath}>
           {item.file.name}
         </div>
@@ -247,7 +247,7 @@ export function CompareView({ item, onSave }: { item: ImageItem; onSave: () => v
               value={r.keptOriginal ? 'Kept original' : formatSaving(item.file.size, r.bytes.byteLength)}
               tone={r.bytes.byteLength < item.file.size ? 'text-good' : 'text-warn'}
             />
-            {!r.keptOriginal && r.quality < 100 && <Stat label="Quality" value={String(Math.round(r.quality))} />}
+            {!r.keptOriginal && r.quality < 100 && <Stat label="Quality" value={String(Math.round(r.quality))} className="short:hidden" />}
             {label && (
               <Stat
                 label="Similarity"
@@ -256,7 +256,7 @@ export function CompareView({ item, onSave }: { item: ImageItem; onSave: () => v
                 title="SSIM: how closely the result matches the original's structure (100% = identical)"
               />
             )}
-            <Stat label="Time" value={`${(r.ms / 1000).toFixed(r.ms < 1000 ? 2 : 1)} s`} />
+            <Stat label="Time" value={`${(r.ms / 1000).toFixed(r.ms < 1000 ? 2 : 1)} s`} className="short:hidden" />
           </>
         ) : (
           <span className="text-muted">{item.status === 'error' ? 'Failed' : 'Compressing…'}</span>
@@ -274,9 +274,9 @@ export function CompareView({ item, onSave }: { item: ImageItem; onSave: () => v
   );
 }
 
-function Stat({ label, value, tone, title }: { label: string; value: string; tone?: string; title?: string }) {
+function Stat({ label, value, tone, title, className }: { label: string; value: string; tone?: string; title?: string; className?: string }) {
   return (
-    <div className="flex items-baseline gap-1.5" title={title}>
+    <div className={cx('flex items-baseline gap-1.5', className)} title={title}>
       <span className="text-faint">{label}</span>
       <span className={cx('font-medium tabular-nums', tone ?? 'text-fg')}>{value}</span>
     </div>

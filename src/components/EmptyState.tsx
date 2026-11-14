@@ -4,11 +4,12 @@ import { Button, Kbd } from './ui.tsx';
 
 export function EmptyState({ onAddFiles, onAddFolder }: { onAddFiles: () => void; onAddFolder: () => void }) {
   return (
-    <div className="flex h-full items-center justify-center overflow-auto p-6">
-      <div className="w-full max-w-2xl">
+    // m-auto (not items-center) so a window too short for it scrolls instead of cutting off the top.
+    <div className="scroll-thin flex h-full overflow-auto p-6 short:p-3">
+      <div className="m-auto w-full max-w-2xl">
         <div
           onClick={onAddFiles}
-          className="group cursor-pointer rounded-[28px] border-2 border-dashed border-line bg-panel/60 px-8 py-14 text-center transition-colors hover:border-brand/60 hover:bg-panel"
+          className="group cursor-pointer rounded-[28px] border-2 border-dashed border-line bg-panel/60 px-8 py-14 text-center short:py-6 transition-colors hover:border-brand/60 hover:bg-panel"
         >
           <div className="brand-gradient mx-auto flex h-16 w-16 items-center justify-center rounded-2xl text-white shadow-[0_12px_32px_-10px_var(--brand)] transition-transform group-hover:scale-105">
             <ImagePlus size={30} />
@@ -26,7 +27,7 @@ export function EmptyState({ onAddFiles, onAddFolder }: { onAddFiles: () => void
             </Button>
           </div>
         </div>
-        <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4 short:mt-3">
           <Feature icon={<Lock size={16} />} title="Private" text="Nothing is uploaded. Pictures never leave this device." />
           <Feature icon={<Sparkles size={16} />} title="Auto quality" text="Finds the smallest file that still looks the same." />
           <Feature icon={<Gauge size={16} />} title="Best codecs" text="MozJPEG, WebP, AVIF and OxiPNG." />

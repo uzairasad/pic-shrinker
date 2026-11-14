@@ -3,9 +3,10 @@ import { useEffect } from 'react';
 import { APP_NAME, APP_VERSION, AUTHOR } from '../appInfo.ts';
 import { openProjectLink } from '../platform/native.ts';
 import { Button } from './ui.tsx';
+import { UpdatesSection, type useUpdates } from './Updates.tsx';
 import { Logo } from './Logo.tsx';
 
-export function About({ onClose }: { onClose: () => void }) {
+export function About({ onClose, updates }: { onClose: () => void; updates: ReturnType<typeof useUpdates> }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -19,7 +20,7 @@ export function About({ onClose }: { onClose: () => void }) {
         aria-modal="true"
         aria-label={`About ${APP_NAME}`}
         onClick={(e) => e.stopPropagation()}
-        className="relative w-full max-w-md rounded-3xl bg-panel p-7 shadow-2xl ring-1 ring-line"
+        className="scroll-thin relative max-h-full w-full max-w-md overflow-y-auto rounded-3xl bg-panel p-7 shadow-2xl ring-1 ring-line short:p-5"
       >
         <button type="button" onClick={onClose} aria-label="Close" className="absolute right-4 top-4 rounded-lg p-1.5 text-muted hover:bg-panel-2 hover:text-fg">
           <X size={16} />
@@ -42,6 +43,7 @@ export function About({ onClose }: { onClose: () => void }) {
           Free and open-source software under the GNU General Public License v3.0 or later. Codecs and libraries keep
           their own licenses.
         </p>
+        <UpdatesSection updates={updates} />
         <div className="mt-5 flex flex-wrap gap-2">
           <Button variant="soft" size="sm" onClick={() => void openProjectLink('website')}>
             <Globe size={14} /> Website

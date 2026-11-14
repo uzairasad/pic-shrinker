@@ -1,6 +1,8 @@
 @import 'tailwindcss';
 
 @custom-variant dark (&:where(.dark, .dark *));
+/* Short windows: high display scaling (150–200%) on laptop screens leaves 400–600 CSS px of height. */
+@custom-variant short (@media (max-height: 600px));
 
 @theme {
   --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
