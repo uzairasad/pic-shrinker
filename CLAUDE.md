@@ -57,6 +57,10 @@ Windows, macOS and Linux. `cargo clippy` needs `dist/` to exist (run `npm run bu
   it (0.2.1 failed on every app because of this, while Chromium tests passed). Band helpers are
   started by the page (`pool.ts`, `lendHelpers`) and connected to the job with MessagePorts;
   a job must still finish with no helpers at all.
+- Band strips must be encoded with `optimize_coding: true`. With it off, MozJPEG writes cut-down
+  Huffman tables (not the standard ones) that can lack codes the band needs; 0.2.2 joined such
+  bands into a 500 MP panorama striped with noise. `walkStrip` now refuses any strip whose data
+  doesn't end exactly where its size says (`BitReader.endsCleanly`).
 - Short windows (display scaling 150–200%): use the `short:` variant (max-height 600px) and let
   content scroll rather than centre-and-clip. Rust shrinks the window to the monitor's work area
   at launch (`fit_window_to_screen`).

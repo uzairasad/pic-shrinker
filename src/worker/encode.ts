@@ -8,8 +8,10 @@ export function isLossless(fmt: EncodableFormat, s: Settings) {
 }
 
 /**
- * `strip`: a band of a larger JPEG that jpeg-join.ts will stitch together, so baseline, and
- * without optimising its Huffman tables (the joiner builds optimal ones for the whole picture).
+ * `strip`: a band of a larger JPEG that jpeg-join.ts will stitch together, so baseline. Its
+ * Huffman tables are still optimised: with `optimize_coding` off, MozJPEG doesn't fall back to the
+ * standard tables but writes cut-down ones that can lack codes the band needs (a 500 MP panorama
+ * came out striped with noise). The joiner builds new tables for the whole picture anyway.
  */
 export async function encode(fmt: EncodableFormat, img: ImageData, s: Settings, quality: number, strip = false): Promise<ArrayBuffer> {
   const q = Math.max(1, Math.min(100, Math.round(quality)));
@@ -21,7 +23,7 @@ export async function encode(fmt: EncodableFormat, img: ImageData, s: Settings, 
         quality: q,
         progressive: j.progressive && !strip,
         baseline: !j.progressive || strip,
-        optimize_coding: !strip,
+        optimize_coding: true,
         smoothing: j.smoothing,
         // MozJpegColorSpace: 1 = grayscale, 3 = YCbCr.
         color_space: j.grayscale ? 1 : 3,

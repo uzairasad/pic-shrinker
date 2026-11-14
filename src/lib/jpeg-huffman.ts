@@ -61,6 +61,10 @@ export class BitReader {
   private bits = 0;
   /** Set once a marker (or the end of the data) was reached. */
   atMarker = false;
+  /** Zero bits fed after the marker (they aren't data). */
+  private padBits = 0;
+  /** Set when a code that isn't in the table turned up. */
+  damaged = false;
 
   constructor(data: Uint8Array, start: number, end = data.length) {
     this.data = data;
@@ -88,6 +92,7 @@ export class BitReader {
       } else {
         this.atMarker = true;
       }
+      if (this.atMarker) this.padBits += 8;
       this.acc = (this.acc << 8) | b;
       this.bits += 8;
     }
@@ -126,6 +131,7 @@ export class BitReader {
       }
     }
     // Not a valid code: damaged data. Skip a bit so decoding keeps moving.
+    this.damaged = true;
     this.bits -= 1;
     return 0;
   }
@@ -135,6 +141,7 @@ export class BitReader {
     this.acc = 0;
     this.bits = 0;
     this.atMarker = false;
+    this.padBits = 0;
     const d = this.data;
     let p = this.pos;
     while (p + 1 < this.end && !(d[p] === 0xff && d[p + 1] >= 0xd0 && d[p + 1] <= 0xd7)) {
@@ -144,6 +151,30 @@ export class BitReader {
     }
     if (p + 1 < this.end && d[p] === 0xff && d[p + 1] >= 0xd0 && d[p + 1] <= 0xd7) p += 2;
     this.pos = p;
+  }
+
+  /**
+   * After the last block of a scan: true when every code was valid and the data ran out exactly
+   * there (no bits read past the marker, and fewer than 8 left over, which is the last byte's
+   * padding). Anything else means the entropy-coded data doesn't match the picture's size.
+   */
+  endsCleanly(): boolean {
+    if (this.damaged || this.bits < this.padBits) return false;
+    let left = this.bits - this.padBits;
+    const d = this.data;
+    for (let p = this.pos; p < this.end && left < 8; ) {
+      if (d[p] === 0xff) {
+        if (p + 1 < this.end && d[p + 1] === 0) {
+          left += 8;
+          p += 2;
+          continue;
+        }
+        break;
+      }
+      left += 8;
+      p++;
+    }
+    return left < 8;
   }
 
   /** Position of the marker that ends this scan. */

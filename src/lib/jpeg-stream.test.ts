@@ -7,7 +7,7 @@ import { JpegStreamDecoder, readJpegInfo } from './jpeg-stream.ts';
 import { AreaResizer, readAll, type LineSource } from './rows.ts';
 
 // Fixtures: a 61×45 gradient saved by libjpeg (Pillow) in several flavours, plus the same picture
-// cut into 16-row strips (baseline, standard Huffman tables, like the strips MozJPEG makes).
+// cut into 16-row strips (baseline, standard Huffman tables, the kind of strips the joiner takes).
 const fixture = (name: string) => new Uint8Array(readFileSync(new URL(`./fixtures/${name}`, import.meta.url)));
 const W = 61;
 const H = 45;
@@ -103,6 +103,25 @@ test('joining with per-strip counts gives the same file as counting at join time
   for (const prefix of ['strip-gray', 'strip-colour']) {
     const { parts } = stacked(prefix);
     assert.deepEqual(joinJpegStrips(parts, parts.map(stripStats)), joinJpegStrips(parts));
+  }
+});
+
+/** A strip with its entropy-coded data changed: `cut` bytes dropped or `extra` bytes added before EOI. */
+function tampered(name: string, cut: number, extra = 0) {
+  const d = fixture(name);
+  const body = d.subarray(0, d.length - 2 - cut);
+  const out = new Uint8Array(body.length + extra + 2);
+  out.set(body);
+  out.fill(0x55, body.length, body.length + extra);
+  out.set([0xff, 0xd9], out.length - 2);
+  return out;
+}
+
+test('refuses strips whose data does not fit their size (it would join into stripes of noise)', () => {
+  for (const bad of [tampered('strip-colour-1.jpg', 6), tampered('strip-colour-1.jpg', 0, 12)]) {
+    const parts = [fixture('strip-colour-0.jpg'), bad, fixture('strip-colour-2.jpg')];
+    assert.throws(() => stripStats(bad), /encoded incorrectly/);
+    assert.throws(() => joinJpegStrips(parts), /encoded incorrectly/);
   }
 });
 

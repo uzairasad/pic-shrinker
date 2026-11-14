@@ -134,6 +134,9 @@ function walkStrip(
       }
     }
   }
+  // A strip whose data doesn't fit its size would turn into stripes of noise in the joined file
+  // (0.2.2 shipped such files when MozJPEG's Huffman tables were missing codes): refuse it.
+  if (!reader.endsCleanly()) throw new JpegError('A band of the picture was encoded incorrectly.');
 }
 
 function segment(marker: number, payload: Uint8Array): Uint8Array {
