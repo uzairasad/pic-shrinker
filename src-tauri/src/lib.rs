@@ -307,28 +307,37 @@ async fn save_file(
 }
 
 /// Asks for an output folder. Returns its path (now allowed for `write_output_file`), or `None`.
+/// Desktop only: on Android/iOS the app saves a batch as one ZIP through `save_file` instead.
 #[tauri::command]
 async fn pick_output_folder(
     app: AppHandle,
     folders: State<'_, OutputFolders>,
 ) -> Result<Option<String>, String> {
-    let mut dialog = app
-        .dialog()
-        .file()
-        .set_title("Save compressed pictures to…");
-    if let Some(dir) = folders.last.lock().unwrap().clone() {
-        dialog = dialog.set_directory(dir);
+    #[cfg(desktop)]
+    {
+        let mut dialog = app
+            .dialog()
+            .file()
+            .set_title("Save compressed pictures to…");
+        if let Some(dir) = folders.last.lock().unwrap().clone() {
+            dialog = dialog.set_directory(dir);
+        }
+        let chosen = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_folder())
+            .await
+            .map_err(|e| e.to_string())?;
+        let Some(chosen) = chosen else {
+            return Ok(None);
+        };
+        let path = chosen.into_path().map_err(|e| e.to_string())?;
+        folders.allowed.lock().unwrap().insert(path.clone());
+        *folders.last.lock().unwrap() = Some(path.clone());
+        Ok(Some(path.to_string_lossy().into_owned()))
     }
-    let chosen = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_folder())
-        .await
-        .map_err(|e| e.to_string())?;
-    let Some(chosen) = chosen else {
-        return Ok(None);
-    };
-    let path = chosen.into_path().map_err(|e| e.to_string())?;
-    folders.allowed.lock().unwrap().insert(path.clone());
-    *folders.last.lock().unwrap() = Some(path.clone());
-    Ok(Some(path.to_string_lossy().into_owned()))
+    #[cfg(mobile)]
+    {
+        let _ = (app, folders);
+        Err("Choosing a folder is not available on this platform".into())
+    }
 }
 
 /// Writes the request body to `x-file-name` (a relative path) inside `x-folder`, which must be a
