@@ -1,4 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Pic Shrinker: a picture with four arrows squeezing it in from the corners. Everything is
+       drawn inside the central circle (radius about 165), so Android's launcher masks, which
+       show only the middle two-thirds of an icon in a circle or squircle, never cut it. -->
   <defs>
     <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#7a52ff"/>
@@ -10,19 +13,21 @@
     </linearGradient>
   </defs>
   <rect width="512" height="512" rx="116" fill="url(#g)"/>
-  <!-- The picture -->
-  <rect x="160" y="160" width="192" height="192" rx="30" fill="url(#m)"/>
-  <circle cx="302" cy="210" r="20" fill="#14c8e6"/>
-  <path d="M160 314 L222 252 Q231 243 240 252 L274 286 L292 268 Q301 259 310 268 L352 310 L352 322 Q352 352 322 352 L190 352 Q160 352 160 322 Z" fill="#7a52ff"/>
-  <!-- Arrows squeezing it in from the corners -->
-  <g fill="none" stroke="#ffffff" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M142 80 L142 142 L80 142"/>
-    <path d="M60 60 L142 142"/>
-    <path d="M370 80 L370 142 L432 142"/>
-    <path d="M452 60 L370 142"/>
-    <path d="M142 432 L142 370 L80 370"/>
-    <path d="M60 452 L142 370"/>
-    <path d="M370 432 L370 370 L432 370"/>
-    <path d="M452 452 L370 370"/>
+  <!-- The picture (120 px square, centred) -->
+  <g transform="translate(256 256) scale(0.625) translate(-256 -256)">
+    <rect x="160" y="160" width="192" height="192" rx="30" fill="url(#m)"/>
+    <circle cx="302" cy="210" r="20" fill="#14c8e6"/>
+    <path d="M160 314 L222 252 Q231 243 240 252 L274 286 L292 268 Q301 259 310 268 L352 310 L352 322 Q352 352 322 352 L190 352 Q160 352 160 322 Z" fill="#7a52ff"/>
+  </g>
+  <!-- Arrows: tips 80 px from the centre each way; nothing reaches past about 166 px -->
+  <g fill="none" stroke="#ffffff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M176 142 L176 176 L142 176"/>
+    <path d="M144 144 L176 176"/>
+    <path d="M176 370 L176 336 L142 336"/>
+    <path d="M144 368 L176 336"/>
+    <path d="M336 142 L336 176 L370 176"/>
+    <path d="M368 144 L336 176"/>
+    <path d="M336 370 L336 336 L370 336"/>
+    <path d="M368 368 L336 336"/>
   </g>
 </svg>
